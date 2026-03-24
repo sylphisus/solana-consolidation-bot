@@ -11,6 +11,7 @@ export interface TokenConfig {
   minSecsBetweenTouches: number; // time-gate: minimum seconds between touches on the same line
   invalidationPct: number;       // if mcap moves this % above a line, reset that line's touch count
   buyMcap: number | null;        // market cap at time of purchase — grid floor
+  sellPct: number;               // % of balance to sell when consolidation triggers (default 100)
   minProfitPct: number | null;   // minimum % above buyMcap required before a sell fires (null = disabled)
   priceTracking: boolean;        // if true, sends ATL and upside alerts via Telegram
   atlAlertSpacingUsd: number;    // fire an ATL alert each time ATL drops by this much (default $10k)

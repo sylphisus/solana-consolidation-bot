@@ -28,7 +28,7 @@ type WizardStep =
   | { flow: "settings";     step: "await_field";   mint: string; symbol: string }
   | { flow: "settings";     step: "await_value";   mint: string; symbol: string; field: SettingsField };
 
-type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap";
+type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "sellPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap";
 
 const wizardState = new Map<number, WizardStep>();
 
@@ -381,6 +381,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
       `• Hysteresis: \`${tc.hysteresisUsd != null ? "$" + fmtMc(tc.hysteresisUsd) : "±" + tc.hysteresisPct + "%"}\`\n` +
       `• Time-gate: \`${tc.minSecsBetweenTouches}s\`\n` +
       `• Invalidation: \`+${tc.invalidationPct}%\`\n` +
+      `• Sell amount: \`${tc.sellPct ?? 100}%\` of balance\n` +
       `• Min profit to sell: \`${tc.minProfitPct != null ? "+" + tc.minProfitPct + "%" : "disabled"}\`\n` +
       `• Price tracking: \`${tc.priceTracking ? "ON" : "OFF"}\`\n` +
       (tc.priceTracking
@@ -399,6 +400,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
           [Markup.button.callback("⏱ Time-gate (secs)", "wiz:field:minSecsBetweenTouches")],
           [Markup.button.callback("🚫 Invalidation %",   "wiz:field:invalidationPct")],
           [Markup.button.callback("💰 Min Profit %",     "wiz:field:minProfitPct")],
+          [Markup.button.callback("📤 Sell Amount %",    "wiz:field:sellPct")],
           [Markup.button.callback(tc.priceTracking ? "📡 Price Tracking: ON  (tap to disable)" : "📡 Price Tracking: OFF  (tap to enable)", "wiz:field:priceTracking")],
           ...(tc.priceTracking ? [
             [Markup.button.callback("🔻 ATL Alert Spacing", "wiz:field:atlAlertSpacingUsd")],
@@ -459,6 +461,11 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
         `🚫 *Invalidation %*\n\nIf the market cap rises this % ABOVE a line, that line's touch count resets to zero.\n\n` +
         `Example: \`50\` = if mcap pumps 50%+ above a line, any touches on it are wiped.\n` +
         `_Prevents counting touches on levels the price has clearly broken out above._`,
+      sellPct:
+        `📤 *Sell Amount %*\n\nWhat percentage of your balance should the bot sell when consolidation is detected?\n\n` +
+        `Example: \`50\` = sell half each time, keep watching for the next consolidation.\n` +
+        `\`100\` = sell everything and stop watching (default).\n` +
+        `_Must be between 1 and 100._`,
       minProfitPct:
         `💰 *Min Profit %*\n\nMinimum % above your average buy mcap that the current mcap must be before a sell fires.\n\n` +
         `Example: \`20\` = only sell if current mcap is at least 20% above your buy mcap.\n` +
@@ -563,6 +570,12 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
         return;
       }
       if (value === 0) value = null as any;
+    } else if (field === "sellPct") {
+      value = parseFloat(text);
+      if (isNaN(value) || value < 1 || value > 100) {
+        ctx.reply("❌ Enter a number between 1 and 100.");
+        return;
+      }
     } else {
       value = parseFloat(text);
       if (isNaN(value) || value <= 0) {
@@ -581,6 +594,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       hysteresisUsd: "Hysteresis $",
       minSecsBetweenTouches: "Time-gate",
       invalidationPct: "Invalidation",
+      sellPct: "Sell amount %",
       minProfitPct: "Min profit %",
       atlAlertSpacingUsd: "ATL alert spacing",
       upsideAlertPct: "Upside alert %",
@@ -643,13 +657,13 @@ export async function notifyTouchDetected(
 
 export async function notifySellTriggered(
   symbol: string, amount: number, levelMcap: number,
-  touchCount: number, currentMcap: number
+  touchCount: number, currentMcap: number, sellPct: number = 100
 ): Promise<void> {
   await safeSend(
     `🔴 *SELL TRIGGERED — ${symbol}*\n\n` +
     `Consolidation detected on line \`${fmtMc(levelMcap)}\`\n` +
     `Touches: \`${touchCount}\`  |  Mcap: \`${fmtMc(currentMcap)}\`\n` +
-    `Amount: \`${amount.toLocaleString()} ${symbol}\`\n\n` +
+    `Amount: \`${amount.toLocaleString()} ${symbol}\` _(${sellPct}% of balance)_\n\n` +
     `⏳ Executing swap on Jupiter...`
   );
 }
