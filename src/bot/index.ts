@@ -261,7 +261,10 @@ async function main(): Promise<void> {
       Object.assign(tc, settings);
       saveConfig(config);
       const ts = state.tokens.get(mint);
-      if (ts) { ts.yLevels = []; ts.anchorMcap = null; ts.sold = false; }
+      if (ts) {
+        ts.yLevels = []; ts.anchorMcap = null; ts.sold = false;
+        if (settings.buyMcap !== undefined) ts.buyMcap = settings.buyMcap ?? null;
+      }
       return `✅ Settings updated for *${tc.symbol}*. Grid rebuilds on next price tick.`;
     },
 

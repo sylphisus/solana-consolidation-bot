@@ -28,7 +28,7 @@ type WizardStep =
   | { flow: "settings";     step: "await_field";   mint: string; symbol: string }
   | { flow: "settings";     step: "await_value";   mint: string; symbol: string; field: SettingsField };
 
-type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct";
+type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap";
 
 const wizardState = new Map<number, WizardStep>();
 
@@ -234,6 +234,7 @@ async function cmdTokens(ctx: Context): Promise<void> {
     const tc = callbacks.getConfig(t.mint);
     if (tc) {
       msg += `• *${t.symbol}*\n`;
+      msg += `  Avg buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`\n`;
       msg += `  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold} touches\`\n`;
       msg += `  Hysteresis: \`±${tc.hysteresisPct}%\`  Time-gate: \`${tc.minSecsBetweenTouches}s\`\n`;
       msg += `  \`${t.mint}\`\n\n`;
@@ -374,6 +375,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
     ctx.reply(
       `⚙️ *Settings for ${symbol}*\n\n` +
       `Current values:\n` +
+      `• Avg buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`\n` +
       `• Level spacing: \`${fmtMc(tc.levelSpacingUsd)}\`\n` +
       `• Touch threshold: \`${tc.touchThreshold}\`\n` +
       `• Hysteresis: \`${tc.hysteresisUsd != null ? "$" + fmtMc(tc.hysteresisUsd) : "±" + tc.hysteresisPct + "%"}\`\n` +
@@ -389,6 +391,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
       {
         parse_mode: "Markdown",
         ...Markup.inlineKeyboard([
+          [Markup.button.callback("💵 Avg Buy Mcap",      "wiz:field:buyMcap")],
           [Markup.button.callback("📏 Level Spacing",    "wiz:field:levelSpacingUsd")],
           [Markup.button.callback("👆 Touch Threshold",  "wiz:field:touchThreshold")],
           [Markup.button.callback("↔️ Hysteresis %",     "wiz:field:hysteresisPct")],
@@ -461,6 +464,10 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
         `Example: \`20\` = only sell if current mcap is at least 20% above your buy mcap.\n` +
         `Set to \`0\` to disable.\n` +
         `_Prevents selling at a loss during consolidation near your entry._`,
+      buyMcap:
+        `💵 *Avg Buy Mcap*\n\nUpdate your average buy market cap. This is used as the grid floor and for the min profit check.\n\n` +
+        `Use shorthand: \`25k\`, \`1.5m\`, \`45m\` etc.\n` +
+        `Set to \`0\` to clear it.`,
       atlAlertSpacingUsd:
         `🔻 *ATL Alert Spacing*\n\nHow far the market cap must drop below the previous all-time low before sending another ATL alert.\n\n` +
         `Use shorthand: \`10k\`, \`50k\`, \`1m\` etc.\n` +
@@ -541,14 +548,14 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
     const { mint, symbol, field } = wizard;
     let value: number | null = null;
 
-    if (field === "levelSpacingUsd" || field === "hysteresisUsd" || field === "atlAlertSpacingUsd") {
+    if (field === "levelSpacingUsd" || field === "hysteresisUsd" || field === "atlAlertSpacingUsd" || field === "buyMcap") {
       value = parseMcap(text);
       if (value === null || value < 0) {
         ctx.reply("❌ Invalid amount. Examples: `500k`, `1m`, `2500000`, or `0` to clear", { parse_mode: "Markdown" });
         return;
       }
-      // 0 means "clear hysteresisUsd and go back to % mode"
-      if (field === "hysteresisUsd" && value === 0) value = null as any;
+      // 0 means "clear" for nullable fields
+      if ((field === "hysteresisUsd" || field === "buyMcap") && value === 0) value = null as any;
     } else if (field === "minProfitPct") {
       value = parseFloat(text);
       if (isNaN(value) || value < 0) {
@@ -577,6 +584,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       minProfitPct: "Min profit %",
       atlAlertSpacingUsd: "ATL alert spacing",
       upsideAlertPct: "Upside alert %",
+      buyMcap: "Avg buy mcap",
     };
 
     ctx.reply(
