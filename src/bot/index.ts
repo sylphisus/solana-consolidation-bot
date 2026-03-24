@@ -25,7 +25,15 @@ import path from "path";
 function loadConfig(): BotConfig {
   const p = path.join(process.cwd(), "config", "tokens.json");
   if (!fs.existsSync(p)) throw new Error(`Config not found at ${p}`);
-  return JSON.parse(fs.readFileSync(p, "utf-8")) as BotConfig;
+  const cfg = JSON.parse(fs.readFileSync(p, "utf-8")) as BotConfig;
+  // Back-fill any fields added after a token was originally saved
+  for (const t of cfg.tokens) {
+    t.minProfitPct        ??= null;
+    t.priceTracking       ??= false;
+    t.atlAlertSpacingUsd  ??= 10_000;
+    t.upsideAlertPct      ??= 30;
+  }
+  return cfg;
 }
 
 function saveConfig(config: BotConfig): void {
