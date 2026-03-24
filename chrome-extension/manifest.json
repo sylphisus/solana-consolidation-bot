@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Consolidation Bot Feed",
+  "version": "1.0",
+  "description": "Streams market cap from Axiom to the consolidation bot",
+  "permissions": ["storage"],
+  "host_permissions": ["https://axiom.trade/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://axiom.trade/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

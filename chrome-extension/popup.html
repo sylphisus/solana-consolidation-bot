@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <style>
+    body {
+      width: 240px;
+      padding: 16px;
+      font-family: -apple-system, sans-serif;
+      font-size: 13px;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    h3 { margin: 0 0 12px; font-size: 14px; color: #00ff87; }
+    .row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .label { color: #7d8590; }
+    .value { font-family: monospace; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .green { background: #00ff87; }
+    .red   { background: #ff4d6d; }
+    .yellow{ background: #ffd60a; }
+    .status { display: flex; align-items: center; margin-bottom: 12px; }
+    .hint { color: #7d8590; font-size: 11px; margin-top: 12px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <h3>🤖 Consolidation Bot</h3>
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="statusText">Checking...</span>
+  </div>
+  <div class="row">
+    <span class="label">Last mcap</span>
+    <span class="value" id="lastMcap">—</span>
+  </div>
+  <div class="row">
+    <span class="label">Updates sent</span>
+    <span class="value" id="updateCount">0</span>
+  </div>
+  <div class="row">
+    <span class="label">Token</span>
+    <span class="value" id="token">—</span>
+  </div>
+  <div class="hint" id="hint">Open a token page on Axiom to start streaming.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

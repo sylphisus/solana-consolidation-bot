@@ -1,0 +1,124 @@
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
+import {
+  getAssociatedTokenAddressSync,
+  getAccount,
+  getMint,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  TokenAccountNotFoundError,
+  TokenInvalidAccountOwnerError,
+} from "@solana/spl-token";
+import bs58 from "bs58";
+import { logger } from "./logger";
+
+// ─── Keypair ──────────────────────────────────────────────────────────────────
+
+let _keypair: Keypair | null = null;
+
+export function loadKeypair(): Keypair {
+  if (_keypair) return _keypair;
+  const raw = process.env.BOT_PRIVATE_KEY;
+  if (!raw || raw === "YOUR_BASE58_PRIVATE_KEY_HERE")
+    throw new Error("BOT_PRIVATE_KEY is not set. Copy .env.example → .env and add your key.");
+  try {
+    _keypair = Keypair.fromSecretKey(bs58.decode(raw));
+    logger.info("Wallet loaded", { publicKey: _keypair.publicKey.toBase58() });
+    return _keypair;
+  } catch (err) {
+    throw new Error(`Failed to decode BOT_PRIVATE_KEY. Ensure it is base58-encoded. Error: ${err}`);
+  }
+}
+
+export function getBotPublicKey(): PublicKey {
+  return loadKeypair().publicKey;
+}
+
+// ─── SOL Balance ──────────────────────────────────────────────────────────────
+
+export async function getSolBalance(connection: Connection): Promise<number> {
+  const lamports = await connection.getBalance(getBotPublicKey());
+  return lamports / LAMPORTS_PER_SOL;
+}
+
+// ─── Token Program Detection ──────────────────────────────────────────────────
+// PumpFun and some other tokens use Token-2022 instead of the standard program.
+// We detect which program owns the mint so ATA lookups use the right one.
+
+const _programCache = new Map<string, PublicKey>();
+
+async function getTokenProgram(connection: Connection, mint: PublicKey): Promise<PublicKey> {
+  const key = mint.toBase58();
+  if (_programCache.has(key)) return _programCache.get(key)!;
+
+  const info = await connection.getAccountInfo(mint);
+  if (!info) throw new Error(`Mint account not found: ${key}`);
+
+  const program = info.owner.equals(TOKEN_2022_PROGRAM_ID)
+    ? TOKEN_2022_PROGRAM_ID
+    : TOKEN_PROGRAM_ID;
+
+  _programCache.set(key, program);
+  logger.debug(`Token program for ${key.slice(0, 8)}: ${program.equals(TOKEN_2022_PROGRAM_ID) ? "Token-2022" : "Standard"}`);
+  return program;
+}
+
+// ─── Decimals ─────────────────────────────────────────────────────────────────
+
+const _decimalsCache = new Map<string, number>();
+
+export async function getTokenDecimals(connection: Connection, mint: string): Promise<number> {
+  if (_decimalsCache.has(mint)) return _decimalsCache.get(mint)!;
+  const program = await getTokenProgram(connection, new PublicKey(mint));
+  const mintInfo = await getMint(connection, new PublicKey(mint), "confirmed", program);
+  _decimalsCache.set(mint, mintInfo.decimals);
+  logger.debug(`Decimals for ${mint.slice(0, 8)}: ${mintInfo.decimals}`);
+  return mintInfo.decimals;
+}
+
+// ─── SPL Token Balance ────────────────────────────────────────────────────────
+
+export async function getTokenBalance(connection: Connection, mint: PublicKey): Promise<bigint> {
+  const owner = getBotPublicKey();
+
+  // Try standard program first, then Token-2022
+  // (getTokenProgram caches the result so the second call is free)
+  const program = await getTokenProgram(connection, mint);
+  const ata = getAssociatedTokenAddressSync(mint, owner, false, program);
+
+  try {
+    const account = await getAccount(connection, ata, "confirmed", program);
+    return account.amount;
+  } catch (err) {
+    if (err instanceof TokenAccountNotFoundError || err instanceof TokenInvalidAccountOwnerError) {
+      return 0n;
+    }
+    throw err;
+  }
+}
+
+export async function getAllTokenBalances(
+  connection: Connection,
+  mints: string[]
+): Promise<Map<string, bigint>> {
+  const balances = new Map<string, bigint>();
+  await Promise.all(
+    mints.map(async (mint) => {
+      try {
+        balances.set(mint, await getTokenBalance(connection, new PublicKey(mint)));
+      } catch (err) {
+        logger.warn(`Failed to fetch balance for ${mint.slice(0, 8)}`, { error: String(err) });
+        balances.set(mint, 0n);
+      }
+    })
+  );
+  return balances;
+}
+
+export function toUiAmount(raw: bigint, decimals: number): number {
+  return Number(raw) / Math.pow(10, decimals);
+}
