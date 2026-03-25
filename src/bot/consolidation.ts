@@ -158,8 +158,7 @@ export function processMarketCap(
         { prev: fmtMc(prevMarketCap), now: fmtMc(newMarketCap), mint: state.mint }
       );
 
-      if (level.touchCount >= config.touchThreshold) {
-        state.sold = true;
+      if (level.touchCount % config.touchThreshold === 0) {
         logger.info(
           `[${state.symbol}] 🎯 CONSOLIDATION — ${level.touchCount} touches on ` +
           `${fmtMc(level.value)} — sell triggered!`,

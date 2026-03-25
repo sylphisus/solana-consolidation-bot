@@ -184,9 +184,6 @@ async function watchToken(
       const sellPct    = tc2.sellPct ?? 100;
       const sellAmount = ts2.balance * BigInt(Math.min(sellPct, 100)) / 100n;
 
-      // Always keep watching — reset grid so detection starts fresh after the sell
-      ts2.yLevels = []; ts2.anchorMcap = null;
-
       await notifySellTriggered(event.symbol, toUiAmount(sellAmount, ts2.decimals),
         event.triggerLevel, event.touchCount, event.currentMarketCap, sellPct);
 
@@ -273,10 +270,12 @@ async function main(): Promise<void> {
       saveConfig(config);
       const ts = state.tokens.get(mint);
       if (ts) {
-        ts.yLevels = []; ts.anchorMcap = null; ts.sold = false;
-        if (settings.buyMcap !== undefined) ts.buyMcap = settings.buyMcap ?? null;
+        if (settings.buyMcap !== undefined) {
+          ts.buyMcap = settings.buyMcap ?? null;
+          ts.yLevels = []; ts.anchorMcap = null;
+        }
       }
-      return `✅ Settings updated for *${tc.symbol}*. Grid rebuilds on next price tick.`;
+      return `✅ Settings updated for *${tc.symbol}*${settings.buyMcap !== undefined ? ". Grid rebuilds on next price tick." : "."}`;
     },
 
     getConfig: (mint) => config.tokens.find((t) => t.mint === mint) ?? null,
