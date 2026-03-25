@@ -169,6 +169,9 @@ async function watchToken(
         const minMcap = tc2.buyMcap * (1 + tc2.minProfitPct / 100);
         if (event.currentMarketCap < minMcap) {
           logger.info(`[${ts2.symbol}] Sell blocked — mcap ${fmtMarketCap(event.currentMarketCap)} below min profit threshold ${fmtMarketCap(minMcap)} (+${tc2.minProfitPct}%)`);
+          // Reset so the token keeps being monitored for the next consolidation
+          ts2.sold = false;
+          ts2.yLevels = []; ts2.anchorMcap = null;
           return;
         }
       }
