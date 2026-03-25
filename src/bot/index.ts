@@ -176,18 +176,11 @@ async function watchToken(
         }
       }
 
-      const sellPct  = tc2.sellPct ?? 100;
+      const sellPct    = tc2.sellPct ?? 100;
       const sellAmount = ts2.balance * BigInt(Math.min(sellPct, 100)) / 100n;
-      const isFullSell = sellPct >= 100;
 
-      if (isFullSell) {
-        tc2.enabled = false;
-        saveConfig(config);
-        stopPriceFeed(mint);
-      } else {
-        // Partial sell — reset grid so it can detect the next consolidation
-        ts2.yLevels = []; ts2.anchorMcap = null;
-      }
+      // Always keep watching — reset grid so detection starts fresh after the sell
+      ts2.yLevels = []; ts2.anchorMcap = null;
 
       await notifySellTriggered(event.symbol, toUiAmount(sellAmount, ts2.decimals),
         event.triggerLevel, event.touchCount, event.currentMarketCap, sellPct);
@@ -199,7 +192,6 @@ async function watchToken(
         .then(async (record) => {
           recordTrade(record, state);
           await notifyTradeResult(record);
-          if (record.status === "success" && isFullSell) ts2.balance = 0n;
         })
         .catch((err) => logger.error("Sell error", { error: String(err) }))
         .finally(() => sellInProgress.delete(event.mint));
