@@ -147,11 +147,16 @@ async function watchToken(
         }
 
         // Upside alert — fires every time mcap rises upsideAlertPct% from last baseline
+        // Baseline also tracks downward so a recovery from a dip always triggers correctly
         if (ts2.lastUpsideAlertMcap !== null) {
-          const upsideTarget = ts2.lastUpsideAlertMcap * (1 + tc2.upsideAlertPct / 100);
-          if (mcap >= upsideTarget) {
+          if (mcap < ts2.lastUpsideAlertMcap) {
             ts2.lastUpsideAlertMcap = mcap;
-            await notifyUpsideAlert(ts2.symbol, mcap, tc2.upsideAlertPct);
+          } else {
+            const upsideTarget = ts2.lastUpsideAlertMcap * (1 + tc2.upsideAlertPct / 100);
+            if (mcap >= upsideTarget) {
+              ts2.lastUpsideAlertMcap = mcap;
+              await notifyUpsideAlert(ts2.symbol, mcap, tc2.upsideAlertPct);
+            }
           }
         }
       }
@@ -229,7 +234,7 @@ async function main(): Promise<void> {
         hysteresisPct: 10,
         hysteresisUsd: null,
         minSecsBetweenTouches: 5,
-        invalidationPct: 50,
+        invalidationPct: 30,
         buyMcap: buyMcap ?? null,
         sellPct: 100,
         minProfitPct: 25,
@@ -275,6 +280,15 @@ async function main(): Promise<void> {
     },
 
     getConfig: (mint) => config.tokens.find((t) => t.mint === mint) ?? null,
+
+    resetAtl: (mint) => {
+      const ts = state.tokens.get(mint);
+      const tc = config.tokens.find((t) => t.mint === mint);
+      if (!ts || !tc) return `Token not found.`;
+      ts.allTimeLow = ts.currentMarketCap;
+      ts.lastAtlAlertMcap = ts.currentMarketCap;
+      return `✅ ATL reset for *${tc.symbol}*. New baseline: \`${fmtMarketCap(ts.currentMarketCap ?? 0)}\``;
+    },
 
     testSell: (mint) => {
       const ts = state.tokens.get(mint);

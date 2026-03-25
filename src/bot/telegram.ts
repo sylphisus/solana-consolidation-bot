@@ -16,6 +16,7 @@ export interface TelegramCallbacks {
   updateSettings: (mint: string, settings: Partial<TokenConfig>) => string;
   getConfig: (mint: string) => TokenConfig | null;
   testSell: (mint: string) => void;
+  resetAtl: (mint: string) => string;
 }
 
 // ─── Wizard State ─────────────────────────────────────────────────────────────
@@ -359,6 +360,14 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
     return;
   }
 
+  if (payload === "reset_atl") {
+    if (wizard?.flow === "settings" && (wizard.step === "await_field" || wizard.step === "await_value")) {
+      const result = callbacks!.resetAtl((wizard as any).mint);
+      ctx.reply(result, { parse_mode: "Markdown", ...backKeyboard() });
+    }
+    return;
+  }
+
   if (payload === "rm_confirm") {
     const w = wizard as any;
     wizardState.delete(chatId);
@@ -405,6 +414,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
           ...(tc.priceTracking ? [
             [Markup.button.callback("🔻 ATL Alert Spacing", "wiz:field:atlAlertSpacingUsd")],
             [Markup.button.callback("🚀 Upside Alert %",    "wiz:field:upsideAlertPct")],
+            [Markup.button.callback("🔄 Reset ATL",         "wiz:reset_atl")],
           ] : []),
           [Markup.button.callback("« Cancel",            "cmd:home")],
         ]),
