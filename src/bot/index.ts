@@ -16,6 +16,7 @@ import {
   notifyInvalidation,
   notifyAtlAlert,
   notifyUpsideAlert,
+  notifySellBlocked,
 } from "./telegram";
 import fs from "fs";
 import path from "path";
@@ -163,18 +164,24 @@ async function watchToken(
     }
 
     if (event) {
-      if (sellInProgress.has(event.mint)) return;
+      if (sellInProgress.has(event.mint)) {
+        await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "sell already in progress");
+        return;
+      }
       if (ts2.balance === 0n) {
+        await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "balance is 0");
         logger.warn(`[${ts2.symbol}] Triggered but balance is 0`); return;
       }
       if (state.solBalance < (config.global.minSolBalance ?? 0.05)) {
+        await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, `SOL balance too low (${state.solBalance.toFixed(4)} SOL)`);
         logger.error(`[${ts2.symbol}] Skipping sell — low SOL`); return;
       }
       if (tc2.minProfitPct != null && tc2.buyMcap != null) {
         const minMcap = tc2.buyMcap * (1 + tc2.minProfitPct / 100);
         if (event.currentMarketCap < minMcap) {
-          logger.info(`[${ts2.symbol}] Sell blocked — mcap ${fmtMarketCap(event.currentMarketCap)} below min profit threshold ${fmtMarketCap(minMcap)} (+${tc2.minProfitPct}%)`);
-          // Reset so the token keeps being monitored for the next consolidation
+          await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap,
+            `below min profit threshold (need \`${fmtMarketCap(minMcap)}\`, currently \`${fmtMarketCap(event.currentMarketCap)}\`)`);
+          logger.info(`[${ts2.symbol}] Sell blocked — below min profit threshold`);
           ts2.sold = false;
           ts2.yLevels = []; ts2.anchorMcap = null;
           return;

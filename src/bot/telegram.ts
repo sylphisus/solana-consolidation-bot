@@ -729,6 +729,17 @@ export async function notifyUpsideAlert(symbol: string, mcap: number, pct: numbe
   );
 }
 
+export async function notifySellBlocked(
+  symbol: string, touchCount: number, levelMcap: number, currentMcap: number, reason: string
+): Promise<void> {
+  await safeSend(
+    `⚠️ *Sell Attempt Blocked — ${symbol}*\n\n` +
+    `Touch #${touchCount} on line \`${fmtMc(levelMcap)}\`\n` +
+    `Mcap: \`${fmtMc(currentMcap)}\`\n` +
+    `Reason: ${reason}`
+  );
+}
+
 export async function notifyInvalidation(
   symbol: string, levelMcap: number, currentMcap: number, invalidationPct: number
 ): Promise<void> {
