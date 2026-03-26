@@ -16,7 +16,6 @@ export interface TokenConfig {
   priceTracking: boolean;        // if true, sends ATL and upside alerts via Telegram
   atlAlertSpacingUsd: number;    // fire an ATL alert each time ATL drops by this much (default $10k)
   upsideAlertPct: number;        // fire an upside alert each time mcap rises this % from last alert (default 30)
-  enabled: boolean;              // false = bot ignores this token (set after sell fires)
   notes?: string;
 }
 

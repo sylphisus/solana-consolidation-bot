@@ -61,7 +61,6 @@ function makeTokenState(mint: string, symbol: string): TokenState {
 function initState(config: BotConfig): BotState {
   const tokens = new Map<string, TokenState>();
   for (const tc of config.tokens) {
-    if (!tc.enabled) continue;
     tokens.set(tc.mint, makeTokenState(tc.mint, tc.symbol));
   }
   return { tokens, solBalance: 0, startTime: Date.now(), totalTradesExecuted: 0 };
@@ -99,7 +98,7 @@ async function watchToken(
   sellInProgress: Set<string>
 ): Promise<void> {
   const tc = config.tokens.find((t) => t.mint === mint);
-  if (!tc || !tc.enabled) return;
+  if (!tc) return;
 
   const ts = state.tokens.get(mint);
   if (!ts) return;
@@ -219,14 +218,14 @@ async function main(): Promise<void> {
   const connection = new Connection(
     process.env.RPC_ENDPOINT || "https://api.mainnet-beta.solana.com", "confirmed"
   );
-  const mints: string[] = config.tokens.filter((t) => t.enabled).map((t) => t.mint);
+  const mints: string[] = config.tokens.map((t) => t.mint);
   const sellInProgress  = new Set<string>();
 
   // ── Telegram ────────────────────────────────────────────────────────────────
   initTelegram({
     getState:      () => state,
     getTradeHistory: () => tradeHistory,
-    getTokenList:  () => config.tokens.filter((t) => t.enabled).map((t) => ({ mint: t.mint, symbol: t.symbol })),
+    getTokenList:  () => config.tokens.map((t) => ({ mint: t.mint, symbol: t.symbol })),
 
     addToken: async (mint, symbol, buyMcap?: number | null) => {
       if (config.tokens.find((t) => t.mint === mint))
@@ -245,7 +244,6 @@ async function main(): Promise<void> {
         priceTracking: false,
         atlAlertSpacingUsd: 10_000,
         upsideAlertPct: 30,
-        enabled: true,
       });
       saveConfig(config);
       const ts = makeTokenState(mint, symbol);
@@ -318,10 +316,10 @@ async function main(): Promise<void> {
 
   await notifyStartup(
     keypair.publicKey.toBase58(),
-    config.tokens.filter((t) => t.enabled).map((t) => t.symbol)
+    config.tokens.map((t) => t.symbol)
   );
 
-  // Start price feeds for all enabled tokens
+  // Start price feeds for all tokens
   await Promise.all(
     mints.map((mint) =>
       watchToken(mint, config, state, connection, keypair, sellInProgress)
@@ -334,7 +332,7 @@ async function main(): Promise<void> {
 
   logger.info(`Bot live — polling every ${POLL_INTERVAL_MS}ms via DexScreener`, {
     wallet: keypair.publicKey.toBase58(),
-    tokens: config.tokens.filter((t) => t.enabled).map((t) => t.symbol),
+    tokens: config.tokens.map((t) => t.symbol),
   });
 
   // ── Background: SOL + balances every 30s ──────────────────────────────────
