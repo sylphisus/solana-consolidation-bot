@@ -233,7 +233,7 @@ async function main(): Promise<void> {
       config.tokens.push({
         mint, symbol,
         levelSpacingUsd: 25_000,
-        touchThreshold: 3,
+        touchThreshold: 5,
         hysteresisPct: 10,
         hysteresisUsd: null,
         minSecsBetweenTouches: 5,
