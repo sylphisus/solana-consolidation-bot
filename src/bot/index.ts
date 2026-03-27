@@ -319,7 +319,7 @@ async function main(): Promise<void> {
     setBondMonitor: (enabled) => {
       bondMonitorEnabled = enabled;
       if (enabled) {
-        startBondMonitor(async (event) => {
+        startBondMonitor(connection, async (event) => {
           await notifyNewBond(
             event.mint, event.name, event.symbol,
             event.description, event.marketCap,

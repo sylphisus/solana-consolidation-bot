@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import axios from "axios";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { logger } from "./logger";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -10,23 +11,33 @@ export interface BondEvent {
   symbol: string;
   description: string;
   marketCap: number;
-  feesSol: number | null;   // total fees paid on bonding curve — null if unavailable
+  feesSol: number | null;
   imageUri?: string;
 }
 
 export type BondNotifyFn = (event: BondEvent) => Promise<void>;
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let bondNotify: BondNotifyFn | null = null;
 let minFeesSol: number = 0.3;
+let solanaConnection: Connection | null = null;
 let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let enabled = false;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function startBondMonitor(onBond: BondNotifyFn, minFees: number = 0.3): void {
+export function startBondMonitor(
+  connection: Connection,
+  onBond: BondNotifyFn,
+  minFees: number = 0.3
+): void {
+  solanaConnection = connection;
   bondNotify = onBond;
   minFeesSol = minFees;
   enabled = true;
@@ -55,21 +66,12 @@ function connect(): void {
   ws.on("message", async (raw) => {
     try {
       const event = JSON.parse(raw.toString());
-
-      // Log the raw event once so we can see all available fields
       logger.info("PumpFun migration event (raw)", { event });
-
       if (!event.mint) return;
 
-      // Extract fees — field name varies by API version
       const feesSol: number | null =
-        event.totalFeesSol   ??
-        event.feesInSol      ??
-        event.fees_in_sol    ??
-        event.totalFees      ??
-        null;
+        event.totalFeesSol ?? event.feesInSol ?? event.fees_in_sol ?? event.totalFees ?? null;
 
-      // Filter by min fees if we have the data
       if (feesSol !== null && feesSol < minFeesSol) {
         logger.info(`PumpFun: skipping ${event.symbol ?? event.mint} — fees ${feesSol} SOL < ${minFeesSol} SOL`);
         return;
@@ -95,10 +97,43 @@ function connect(): void {
 
 function scheduleReconnect(): void {
   if (!enabled || reconnectTimer) return;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, 5_000);
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 5_000);
+}
+
+// ─── Metaplex image fetch ─────────────────────────────────────────────────────
+
+async function getOnChainImage(mint: string): Promise<string | undefined> {
+  if (!solanaConnection) return undefined;
+  try {
+    const mintKey = new PublicKey(mint);
+    const [metadataPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), mintKey.toBuffer()],
+      METADATA_PROGRAM_ID
+    );
+
+    const accountInfo = await solanaConnection.getAccountInfo(metadataPDA);
+    if (!accountInfo) return undefined;
+
+    // Metaplex metadata layout (v1):
+    // 1 key + 32 update_authority + 32 mint
+    // + 4 name_len + 32 name (padded)
+    // + 4 symbol_len + 10 symbol (padded)
+    // + 4 uri_len + 200 uri (padded)
+    const data = accountInfo.data;
+    const uriLenOffset = 1 + 32 + 32 + 4 + 32 + 4 + 10;
+    const uriLen = data.readUInt32LE(uriLenOffset);
+    const uriStart = uriLenOffset + 4;
+    const uri = data.slice(uriStart, uriStart + uriLen)
+      .toString("utf-8").replace(/\0/g, "").trim();
+
+    if (!uri) return undefined;
+
+    // Fetch the JSON at the URI to get the image
+    const { data: meta } = await axios.get(uri, { timeout: 6_000 });
+    return typeof meta?.image === "string" ? meta.image : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ─── Token info ───────────────────────────────────────────────────────────────
@@ -108,16 +143,15 @@ async function fetchTokenInfo(
   rawEvent: Record<string, any>,
   feesSol: number | null
 ): Promise<BondEvent | null> {
-  // Pull what we can directly from the migration event first
-  const fromEvent: Partial<BondEvent> = {
-    mint,
-    name:      rawEvent.name        ?? undefined,
-    symbol:    rawEvent.symbol      ?? undefined,
-    marketCap: rawEvent.marketCapSol ?? rawEvent.market_cap ?? 0,
-    feesSol,
-  };
+  // 1. Try on-chain Metaplex metadata for image (most reliable for new tokens)
+  const imageUri = await getOnChainImage(mint);
 
-  // Try to enrich with DexScreener (description + image)
+  // 2. Enrich with DexScreener for mcap (may not be indexed yet — best effort)
+  let name: string    = rawEvent.name   ?? "Unknown";
+  let symbol: string  = rawEvent.symbol ?? "???";
+  let marketCap       = rawEvent.marketCapSol ?? rawEvent.market_cap ?? 0;
+  let description     = "";
+
   try {
     const { data } = await axios.get(
       `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
@@ -125,29 +159,13 @@ async function fetchTokenInfo(
     );
     const pair = data?.pairs?.[0];
     if (pair) {
-      return {
-        mint,
-        name:        fromEvent.name    ?? pair.baseToken?.name   ?? "Unknown",
-        symbol:      fromEvent.symbol  ?? pair.baseToken?.symbol ?? "???",
-        description: "",   // DexScreener doesn't provide descriptions
-        marketCap:   pair.marketCap    ?? fromEvent.marketCap    ?? 0,
-        feesSol,
-        imageUri:    pair.info?.imageUrl ?? undefined,
-      };
+      name      = pair.baseToken?.name   ?? name;
+      symbol    = pair.baseToken?.symbol ?? symbol;
+      marketCap = pair.marketCap         ?? marketCap;
     }
-  } catch {
-    // DexScreener failed — fall through to event-only data
-  }
+  } catch { /* non-fatal */ }
 
-  // Fallback: use only what the migration event provided
-  if (!fromEvent.name && !fromEvent.symbol) return null;
-  return {
-    mint,
-    name:        fromEvent.name      ?? "Unknown",
-    symbol:      fromEvent.symbol    ?? "???",
-    description: "",
-    marketCap:   fromEvent.marketCap ?? 0,
-    feesSol,
-    imageUri:    undefined,
-  };
+  if (name === "Unknown" && symbol === "???") return null;
+
+  return { mint, name, symbol, description, marketCap, feesSol, imageUri };
 }
