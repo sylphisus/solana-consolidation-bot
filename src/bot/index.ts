@@ -320,8 +320,12 @@ async function main(): Promise<void> {
       bondMonitorEnabled = enabled;
       if (enabled) {
         startBondMonitor(async (event) => {
-          await notifyNewBond(event.mint, event.name, event.symbol, event.description, event.marketCap);
-        });
+          await notifyNewBond(
+            event.mint, event.name, event.symbol,
+            event.description, event.marketCap,
+            event.feesSol, event.imageUri
+          );
+        }, 0.3);
       } else {
         stopBondMonitor();
       }

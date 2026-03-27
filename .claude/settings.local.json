@@ -5,7 +5,10 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(curl -s \"https://pump.fun/api/coins/EAjpEwg8BFpDFdHFoDsR8RBiJRMou36YDacpxsYPpump\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -A \"Mozilla/5.0\" \"https://frontend-api.pump.fun/coins/EAjpEwg8BFpDFdHFoDsR8RBiJRMou36YDacpxsYPpump\")"
     ]
   }
 }

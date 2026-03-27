@@ -771,16 +771,35 @@ export async function notifyInvalidation(
 
 export async function notifyNewBond(
   mint: string, name: string, symbol: string,
-  description: string, marketCap: number
+  description: string, marketCap: number,
+  feesSol: number | null, imageUri?: string
 ): Promise<void> {
+  if (!tg || !authorizedChatId) return;
   const desc = description.trim();
   const descLine = desc ? `\n📝 _${desc.length > 200 ? desc.slice(0, 200) + "…" : desc}_\n` : "";
-  await safeSend(
+  const feesLine = feesSol !== null ? `Fees paid: \`${feesSol.toFixed(3)} SOL\`\n` : "";
+  const caption =
     `🔗 *New Bond — ${name} (${symbol})*\n\n` +
     `Mcap: \`${fmtMc(marketCap)}\`\n` +
+    feesLine +
     descLine +
-    `\n[pump.fun](https://pump.fun/${mint})  •  [DexScreener](https://dexscreener.com/solana/${mint})`
-  );
+    `\n[pump.fun](https://pump.fun/${mint})  •  [DexScreener](https://dexscreener.com/solana/${mint})`;
+
+  try {
+    if (imageUri) {
+      await tg.telegram.sendPhoto(authorizedChatId, imageUri, {
+        caption,
+        parse_mode: "Markdown",
+      } as any);
+    } else {
+      await tg.telegram.sendMessage(authorizedChatId, caption, {
+        parse_mode: "Markdown",
+        link_preview_options: { is_disabled: true },
+      } as any);
+    }
+  } catch (err) {
+    logger.error("Failed to send bond notification", { error: String(err) });
+  }
 }
 
 async function safeSend(message: string): Promise<void> {
