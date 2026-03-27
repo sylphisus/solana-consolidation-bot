@@ -17,6 +17,8 @@ export interface TelegramCallbacks {
   getConfig: (mint: string) => TokenConfig | null;
   testSell: (mint: string) => void;
   resetAtl: (mint: string) => string;
+  setBondMonitor: (enabled: boolean) => void;
+  getBondMonitorEnabled: () => boolean;
 }
 
 // ─── Wizard State ─────────────────────────────────────────────────────────────
@@ -107,6 +109,9 @@ function sendHome(ctx: Context): void {
 }
 
 function mainMenuKeyboard() {
+  const bondLabel = callbacks?.getBondMonitorEnabled()
+    ? "🔗 Bond Monitor: ON"
+    : "🔗 Bond Monitor: OFF";
   return Markup.inlineKeyboard([
     [Markup.button.callback("📊 Status",        "cmd:status"),
      Markup.button.callback("💰 Prices",        "cmd:prices")],
@@ -117,6 +122,7 @@ function mainMenuKeyboard() {
      Markup.button.callback("🗑 Remove Token",  "cmd:removetoken")],
     [Markup.button.callback("⚙️ Settings",      "cmd:settings")],
     [Markup.button.callback("🧪 Test Sell",      "cmd:testsell")],
+    [Markup.button.callback(bondLabel,           "cmd:togglebond")],
   ]);
 }
 
@@ -178,6 +184,18 @@ This will sell your ENTIRE balance immediately.`,
       case "settings":    return startSettings(ctx);
       case "testsell":    return startTestSell(ctx);
       case "home":        return sendHome(ctx);
+      case "togglebond": {
+        if (!callbacks) return;
+        const nowEnabled = !callbacks.getBondMonitorEnabled();
+        callbacks.setBondMonitor(nowEnabled);
+        ctx.reply(
+          nowEnabled
+            ? "🔗 *Bond Monitor ON* — you'll be notified when tokens bond on PumpFun."
+            : "🔗 *Bond Monitor OFF* — bond notifications paused.",
+          { parse_mode: "Markdown", ...mainMenuKeyboard() }
+        );
+        return;
+      }
     }
   }
 }
@@ -748,6 +766,20 @@ export async function notifyInvalidation(
     `Line \`${fmtMc(levelMcap)}\` reset — mcap pumped >${invalidationPct}% above it\n` +
     `Mcap now: \`${fmtMc(currentMcap)}\`\n` +
     `_Touch count cleared. Line will re-arm if price returns._`
+  );
+}
+
+export async function notifyNewBond(
+  mint: string, name: string, symbol: string,
+  description: string, marketCap: number
+): Promise<void> {
+  const desc = description.trim();
+  const descLine = desc ? `\n📝 _${desc.length > 200 ? desc.slice(0, 200) + "…" : desc}_\n` : "";
+  await safeSend(
+    `🔗 *New Bond — ${name} (${symbol})*\n\n` +
+    `Mcap: \`${fmtMc(marketCap)}\`\n` +
+    descLine +
+    `\n[pump.fun](https://pump.fun/${mint})  •  [DexScreener](https://dexscreener.com/solana/${mint})`
   );
 }
 

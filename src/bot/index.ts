@@ -17,7 +17,9 @@ import {
   notifyAtlAlert,
   notifyUpsideAlert,
   notifySellBlocked,
+  notifyNewBond,
 } from "./telegram";
+import { startBondMonitor, stopBondMonitor } from "./pumpfun";
 import fs from "fs";
 import path from "path";
 
@@ -220,6 +222,7 @@ async function main(): Promise<void> {
   );
   const mints: string[] = config.tokens.map((t) => t.mint);
   const sellInProgress  = new Set<string>();
+  let bondMonitorEnabled = false;
 
   // ── Telegram ────────────────────────────────────────────────────────────────
   initTelegram({
@@ -312,6 +315,19 @@ async function main(): Promise<void> {
         })
         .catch((err) => logger.error("Test sell error", { error: String(err) }));
     },
+
+    setBondMonitor: (enabled) => {
+      bondMonitorEnabled = enabled;
+      if (enabled) {
+        startBondMonitor(async (event) => {
+          await notifyNewBond(event.mint, event.name, event.symbol, event.description, event.marketCap);
+        });
+      } else {
+        stopBondMonitor();
+      }
+    },
+
+    getBondMonitorEnabled: () => bondMonitorEnabled,
   });
 
   await notifyStartup(
@@ -367,8 +383,8 @@ async function main(): Promise<void> {
   }
 }
 
-process.on("SIGINT",  () => { logger.info("Shutting down..."); stopAllFeeds(); process.exit(0); });
-process.on("SIGTERM", () => { logger.info("Shutting down..."); stopAllFeeds(); process.exit(0); });
+process.on("SIGINT",  () => { logger.info("Shutting down..."); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
+process.on("SIGTERM", () => { logger.info("Shutting down..."); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
 process.on("uncaughtException", (err) => {
   logger.error("Uncaught exception", { error: err.message }); stopAllFeeds(); process.exit(1);
 });
