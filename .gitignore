@@ -6,3 +6,4 @@ bot-wallet.json
 *.log
 logs/
 .DS_Store
+config/tokens.json
