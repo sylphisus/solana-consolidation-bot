@@ -255,7 +255,7 @@ async function main(): Promise<void> {
       if (!mints.includes(mint)) mints.push(mint);
       watchToken(mint, config, state, connection, keypair, sellInProgress)
         .catch((err) => logger.error(`Failed to watch ${symbol}`, { error: String(err) }));
-      return `✅ *${symbol}* added. Polling DexScreener every ${POLL_INTERVAL_MS}ms.\n\nUse ⚙️ Settings to adjust detection parameters.`;
+      return `✅ *${symbol}* added. Polling DexScreener every ${POLL_INTERVAL_MS / 1000}s.\n\nUse ⚙️ Settings to adjust detection parameters.`;
     },
 
     removeToken: (mint) => {
