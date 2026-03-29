@@ -79,9 +79,6 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("cancel", (ctx) => { wizardState.delete(ctx.chat.id); ctx.reply("Cancelled."); sendHome(ctx); });
 
   bot.command("status",      cmdStatus);
-  bot.command("prices",      cmdPrices);
-  bot.command("tokens",      cmdTokens);
-  bot.command("levels",      cmdLevels);
   bot.command("trades",      cmdTrades);
   bot.command("addtoken",    (ctx) => startAddToken(ctx));
   bot.command("removetoken", (ctx) => startRemoveToken(ctx));
@@ -113,10 +110,7 @@ function mainMenuKeyboard() {
     ? "🔗 Bond Monitor: ON"
     : "🔗 Bond Monitor: OFF";
   return Markup.inlineKeyboard([
-    [Markup.button.callback("📊 Status",        "cmd:status"),
-     Markup.button.callback("💰 Prices",        "cmd:prices")],
-    [Markup.button.callback("🪙 My Tokens",     "cmd:tokens"),
-     Markup.button.callback("📈 Active Levels", "cmd:levels")],
+    [Markup.button.callback("📊 Status",        "cmd:status")],
     [Markup.button.callback("📋 Trade History", "cmd:trades")],
     [Markup.button.callback("➕ Add Token",     "cmd:addtoken"),
      Markup.button.callback("🗑 Remove Token",  "cmd:removetoken")],
@@ -175,9 +169,6 @@ This will sell your ENTIRE balance immediately.`,
   if (data.startsWith("cmd:")) {
     switch (data.slice(4)) {
       case "status":      return cmdStatus(ctx);
-      case "prices":      return cmdPrices(ctx);
-      case "tokens":      return cmdTokens(ctx);
-      case "levels":      return cmdLevels(ctx);
       case "trades":      return cmdTrades(ctx);
       case "addtoken":    return startAddToken(ctx);
       case "removetoken": return startRemoveToken(ctx);
@@ -204,89 +195,46 @@ This will sell your ENTIRE balance immediately.`,
 
 async function cmdStatus(ctx: Context): Promise<void> {
   if (!callbacks) return;
-  const state = callbacks.getState();
-  const solWarn = state.solBalance < 0.05 ? " ⚠️ LOW" : "";
-  let msg = `*Bot Status*\n\n`;
-  msg += `⏱ Uptime: \`${fmtUptime(Date.now() - state.startTime)}\`\n`;
-  msg += `◎ SOL: \`${state.solBalance.toFixed(4)}\`${solWarn}\n`;
-  msg += `📈 Total trades: \`${state.totalTradesExecuted}\`\n\n*Token Balances*\n`;
-  for (const [, ts] of state.tokens) {
-    const ui = toUiAmount(ts.balance, ts.decimals);
-    const val = ts.currentPrice ? ` ($${(ui * ts.currentPrice).toFixed(2)})` : "";
-    const watching = ts.sold ? " 🔴 sold" : " 👀 watching";
-    msg += `• *${ts.symbol}*: \`${ui.toLocaleString()}${val}\`${watching}\n`;
-  }
-  if (state.solBalance < 0.05) msg += `\n⚠️ *SOL is low!* Top up soon.`;
-  ctx.reply(msg, { parse_mode: "Markdown", ...backKeyboard() });
-}
-
-async function cmdPrices(ctx: Context): Promise<void> {
-  if (!callbacks) return;
-  const state = callbacks.getState();
-  let msg = `*Current Market Caps*\n\n`;
-  for (const [, ts] of state.tokens) {
-    const ago = ts.lastUpdated ? `${Math.round((Date.now() - ts.lastUpdated) / 1000)}s ago` : "unknown";
-    const mc = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "unavailable";
-    const px = ts.currentPrice != null
-      ? `$${ts.currentPrice < 1 ? ts.currentPrice.toFixed(6) : ts.currentPrice.toFixed(4)}`
-      : "—";
-    msg += `• *${ts.symbol}*\n  Mcap: \`${mc}\`  Price: \`${px}\`  _(${ago})_\n\n`;
-  }
-  ctx.reply(msg, { parse_mode: "Markdown", ...backKeyboard() });
-}
-
-async function cmdTokens(ctx: Context): Promise<void> {
-  if (!callbacks) return;
+  const state  = callbacks.getState();
   const tokens = callbacks.getTokenList();
+
+  let msg = `*Bot Status*\n`;
+  msg += `⏱ Uptime: \`${fmtUptime(Date.now() - state.startTime)}\`  📈 Trades: \`${state.totalTradesExecuted}\`\n`;
+  msg += `◎ SOL: \`${state.solBalance.toFixed(4)}\`\n\n`;
+
   if (tokens.length === 0) {
-    ctx.reply("No tokens added yet. Tap *Add Token* to get started.", {
-      parse_mode: "Markdown",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("➕ Add Token", "cmd:addtoken")],
-        [Markup.button.callback("« Back", "cmd:home")],
-      ]),
-    });
-    return;
-  }
-  let msg = `*Watched Tokens*\n\n`;
-  for (const t of tokens) {
-    const tc = callbacks.getConfig(t.mint);
-    if (tc) {
-      msg += `• *${t.symbol}*\n`;
-      msg += `  Avg buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`\n`;
-      msg += `  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold} touches\`\n`;
-      msg += `  Hysteresis: \`±${tc.hysteresisPct}%\`  Time-gate: \`${tc.minSecsBetweenTouches}s\`\n`;
-      msg += `  \`${t.mint}\`\n\n`;
+    msg += "_No tokens being watched._";
+  } else {
+    for (const t of tokens) {
+      const ts = state.tokens.get(t.mint);
+      const tc = callbacks.getConfig(t.mint);
+      if (!ts || !tc) continue;
+
+      const mc  = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "—";
+      const px  = ts.currentPrice != null
+        ? `$${ts.currentPrice < 1 ? ts.currentPrice.toFixed(6) : ts.currentPrice.toFixed(4)}`
+        : "—";
+      const ui  = toUiAmount(ts.balance, ts.decimals);
+      const val = ts.currentPrice ? ` ($${(ui * ts.currentPrice).toFixed(2)})` : "";
+      const ago = ts.lastUpdated ? `${Math.round((Date.now() - ts.lastUpdated) / 1000)}s ago` : "?";
+
+      msg += `*${ts.symbol}*\n`;
+      msg += `  Mcap: \`${mc}\`  Price: \`${px}\`  _(${ago})_\n`;
+      msg += `  Balance: \`${ui.toLocaleString()}${val}\`\n`;
+      msg += `  Buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold}\`\n`;
+
+      const hot = getHottestLevels(ts, 3);
+      if (hot.length > 0) {
+        for (const l of hot) {
+          const bar = progBar(l.touchCount, tc.touchThreshold);
+          const lastAgo = l.lastTouchTime ? `${Math.round((Date.now() - l.lastTouchTime) / 1000)}s ago` : "never";
+          msg += `  \`${fmtMc(l.value)}\` ${bar} ${l.touchCount}/${tc.touchThreshold} _(${lastAgo})_\n`;
+        }
+      }
+      msg += "\n";
     }
   }
-  ctx.reply(msg, { parse_mode: "Markdown", ...backKeyboard() });
-}
 
-async function cmdLevels(ctx: Context): Promise<void> {
-  if (!callbacks) return;
-  const state = callbacks.getState();
-  let msg = `*Most-Touched Lines*\n\n`;
-  let any = false;
-
-  for (const [, ts] of state.tokens) {
-    const hot = getHottestLevels(ts, 5);
-    if (hot.length === 0) continue;
-    any = true;
-    const tc = callbacks.getConfig(ts.mint);
-    const threshold = tc?.touchThreshold ?? "?";
-    const mcStr = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "?";
-    msg += `*${ts.symbol}* — now: \`${mcStr}\`\n`;
-    for (const l of hot) {
-      const bar = progBar(l.touchCount, typeof threshold === "number" ? threshold : 4);
-      const ago = l.lastTouchTime
-        ? `${Math.round((Date.now() - l.lastTouchTime) / 1000)}s ago`
-        : "never";
-      msg += `  \`${fmtMc(l.value)}\`  ${bar} ${l.touchCount}/${threshold}  _(last: ${ago})_\n`;
-    }
-    msg += "\n";
-  }
-
-  if (!any) msg += "No touches recorded yet — the grid builds on the first price reading.";
   ctx.reply(msg, { parse_mode: "Markdown", ...backKeyboard() });
 }
 
