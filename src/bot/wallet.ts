@@ -105,17 +105,23 @@ export async function getAllTokenBalances(
   connection: Connection,
   mints: string[]
 ): Promise<Map<string, bigint>> {
-  const balances = new Map<string, bigint>();
-  await Promise.all(
-    mints.map(async (mint) => {
-      try {
-        balances.set(mint, await getTokenBalance(connection, new PublicKey(mint)));
-      } catch (err) {
-        logger.warn(`Failed to fetch balance for ${mint.slice(0, 8)}`, { error: String(err) });
-        balances.set(mint, 0n);
-      }
-    })
-  );
+  const balances = new Map<string, bigint>(mints.map(m => [m, 0n]));
+  const owner = getBotPublicKey();
+
+  // Fetch all token accounts in 2 calls (standard + Token-2022) instead of N calls
+  const [standard, token2022] = await Promise.all([
+    connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
+    connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }),
+  ]);
+
+  for (const { account } of [...standard.value, ...token2022.value]) {
+    const parsed = account.data.parsed?.info;
+    if (!parsed) continue;
+    const mint   = parsed.mint as string;
+    const amount = BigInt(parsed.tokenAmount?.amount ?? "0");
+    if (balances.has(mint)) balances.set(mint, amount);
+  }
+
   return balances;
 }
 
