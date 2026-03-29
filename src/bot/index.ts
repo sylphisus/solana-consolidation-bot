@@ -1,7 +1,7 @@
 import "dotenv/config";
-import { Connection } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { BotConfig, BotState, TokenState, TradeRecord } from "./types";
-import { loadKeypair, getSolBalance, getAllTokenBalances, getTokenDecimals, toUiAmount } from "./wallet";
+import { loadKeypair, getSolBalance, getTokenBalance, getTokenDecimals, toUiAmount } from "./wallet";
 import { startPriceFeed, stopPriceFeed, stopAllFeeds, fmtMarketCap } from "./price";
 import { processMarketCap, fmtMc } from "./consolidation";
 import { executeSell } from "./executor";
@@ -169,6 +169,10 @@ async function watchToken(
         await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "sell already in progress");
         return;
       }
+      // Fetch balance on-demand right before sell — no need to poll it
+      ts2.balance = await getTokenBalance(connection, new PublicKey(event.mint))
+        .catch(() => 0n);
+
       if (ts2.balance === 0n) {
         await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "balance is 0");
         logger.warn(`[${ts2.symbol}] Triggered but balance is 0`); return;
@@ -365,15 +369,6 @@ async function main(): Promise<void> {
       if (state.solBalance < (config.global.minSolBalance ?? 0.05)) {
         if (!solLowNotified) { await notifyLowSol(state.solBalance); solLowNotified = true; }
       } else { solLowNotified = false; }
-
-      const activeMints = mints.filter((m) => !state.tokens.get(m)?.sold);
-      if (activeMints.length > 0) {
-        const balances = await getAllTokenBalances(connection, activeMints);
-        for (const [mint, amount] of balances) {
-          const ts = state.tokens.get(mint);
-          if (ts) { ts.balance = amount; ts.lastBalanceCheck = Date.now(); }
-        }
-      }
 
       if (iter % 4 === 0) logger.info("Heartbeat", {
         sol: state.solBalance.toFixed(4),
