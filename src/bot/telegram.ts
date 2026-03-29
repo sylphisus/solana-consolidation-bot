@@ -211,16 +211,12 @@ async function cmdStatus(ctx: Context): Promise<void> {
       if (!ts || !tc) continue;
 
       const mc  = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "—";
-      const px  = ts.currentPrice != null
-        ? `$${ts.currentPrice < 1 ? ts.currentPrice.toFixed(6) : ts.currentPrice.toFixed(4)}`
-        : "—";
       const ui  = toUiAmount(ts.balance, ts.decimals);
-      const val = ts.currentPrice ? ` ($${(ui * ts.currentPrice).toFixed(2)})` : "";
       const ago = ts.lastUpdated ? `${Math.round((Date.now() - ts.lastUpdated) / 1000)}s ago` : "?";
 
       msg += `*${ts.symbol}*\n`;
-      msg += `  Mcap: \`${mc}\`  Price: \`${px}\`  _(${ago})_\n`;
-      msg += `  Balance: \`${ui.toLocaleString()}${val}\`\n`;
+      msg += `  Mcap: \`${mc}\`  _(${ago})_\n`;
+      msg += `  Balance: \`${ui.toLocaleString()}\`\n`;
       msg += `  Buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold}\`\n`;
 
       const hot = getHottestLevels(ts, 3);
