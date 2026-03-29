@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { BotConfig, BotState, TokenState, TradeRecord } from "./types";
-import { loadKeypair, getSolBalance, getTokenBalance, getTokenDecimals, toUiAmount } from "./wallet";
+import { loadKeypair, getTokenBalance, getTokenDecimals, toUiAmount } from "./wallet";
 import { startPriceFeed, stopPriceFeed, stopAllFeeds, fmtMarketCap } from "./price";
 import { processMarketCap, fmtMc } from "./consolidation";
 import { executeSell } from "./executor";
@@ -177,10 +177,7 @@ async function watchToken(
         await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "balance is 0");
         logger.warn(`[${ts2.symbol}] Triggered but balance is 0`); return;
       }
-      if (state.solBalance < (config.global.minSolBalance ?? 0.05)) {
-        await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, `SOL balance too low (${state.solBalance.toFixed(4)} SOL)`);
-        logger.error(`[${ts2.symbol}] Skipping sell — low SOL`); return;
-      }
+
       if (tc2.minProfitPct != null && tc2.buyMcap != null) {
         const minMcap = tc2.buyMcap * (1 + tc2.minProfitPct / 100);
         if (event.currentMarketCap < minMcap) {
@@ -359,26 +356,12 @@ async function main(): Promise<void> {
     tokens: config.tokens.map((t) => t.symbol),
   });
 
-  // ── Background: SOL + balances every 30s ──────────────────────────────────
-  let solLowNotified = false;
+  // ── Heartbeat every 2 minutes ─────────────────────────────────────────────
   let iter = 0;
   while (true) {
     iter++;
-    try {
-      state.solBalance = await getSolBalance(connection);
-      if (state.solBalance < (config.global.minSolBalance ?? 0.05)) {
-        if (!solLowNotified) { await notifyLowSol(state.solBalance); solLowNotified = true; }
-      } else { solLowNotified = false; }
-
-      if (iter % 4 === 0) logger.info("Heartbeat", {
-        sol: state.solBalance.toFixed(4),
-        trades: state.totalTradesExecuted,
-      });
-
-    } catch (err) {
-      logger.error("Background loop error", { error: String(err) });
-    }
-    await new Promise((r) => setTimeout(r, 30_000));
+    if (iter % 1 === 0) logger.info("Heartbeat", { trades: state.totalTradesExecuted });
+    await new Promise((r) => setTimeout(r, 120_000));
   }
 }
 
