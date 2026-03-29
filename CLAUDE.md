@@ -50,7 +50,8 @@ npm run dev
 
 ### Telegram Interface
 - Single bot, single chat ID (your personal bot)
-- Commands: `/start`, `/status`, `/trades`, `/addtoken`, `/removetoken`, `/settings`
+- Commands: `/start`, `/status`, `/trades`, `/removetoken`, `/settings`
+- Paste any Solana CA directly in chat to add a token (auto-detected)
 - All interaction via inline keyboard buttons
 - `config/tokens.json` is the source of truth — updated live
 
