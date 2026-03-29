@@ -1,7 +1,7 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { BotState, TokenConfig, TradeRecord } from "./types";
 import { toUiAmount } from "./wallet";
-import { fmtMarketCap, fetchTokenInfo } from "./price";
+import { fetchTokenInfo } from "./price";
 import { getHottestLevels, fmtMc } from "./consolidation";
 import { logger } from "./logger";
 
@@ -24,7 +24,6 @@ export interface TelegramCallbacks {
 // ─── Wizard State ─────────────────────────────────────────────────────────────
 
 type WizardStep =
-  | { flow: "add_token";    step: "await_mint" }
   | { flow: "add_token";    step: "await_avg_price"; mint: string; symbol: string; marketCap: number }
   | { flow: "remove_token"; step: "await_pick" }
   | { flow: "settings";     step: "await_token" }
@@ -80,9 +79,8 @@ function registerHandlers(bot: Telegraf): void {
 
   bot.command("status",      cmdStatus);
   bot.command("trades",      cmdTrades);
-  bot.command("addtoken",    (ctx) => startAddToken(ctx));
   bot.command("removetoken", (ctx) => startRemoveToken(ctx));
-  bot.command("settings",    (ctx) => startSettings(ctx));
+  bot.command("settings",    (ctx) => startSettings(ctx, false));
 
   bot.on("callback_query", async (ctx) => {
     await ctx.answerCbQuery();
@@ -93,6 +91,14 @@ function registerHandlers(bot: Telegraf): void {
   bot.on("text", async (ctx) => {
     const wizard = wizardState.get(ctx.chat.id);
     if (wizard) { await handleWizardInput(ctx, wizard); return; }
+
+    // Auto-detect contract address — kick off add-token flow immediately
+    const text = ((ctx.message as any)?.text ?? "").trim();
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+      await handleAutoAddCA(ctx, text);
+      return;
+    }
+
     ctx.reply("Send /help to see the menu.", mainMenuKeyboard());
   });
 }
@@ -112,8 +118,7 @@ function mainMenuKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("🪙 Tokens",        "cmd:status")],
     [Markup.button.callback("📋 Trade History", "cmd:trades")],
-    [Markup.button.callback("➕ Add Token",     "cmd:addtoken"),
-     Markup.button.callback("🗑 Remove Token",  "cmd:removetoken")],
+    [Markup.button.callback("🗑 Remove Token",  "cmd:removetoken")],
     [Markup.button.callback("⚙️ Settings",      "cmd:settings")],
     [Markup.button.callback("🧪 Test Sell",      "cmd:testsell")],
     [Markup.button.callback(bondLabel,           "cmd:togglebond")],
@@ -170,9 +175,9 @@ This will sell your ENTIRE balance immediately.`,
     switch (data.slice(4)) {
       case "status":      return cmdStatus(ctx);
       case "trades":      return cmdTrades(ctx);
-      case "addtoken":    return startAddToken(ctx);
       case "removetoken": return startRemoveToken(ctx);
-      case "settings":    return startSettings(ctx);
+      case "settings":     return startSettings(ctx, false);
+      case "settings_all": return startSettings(ctx, true);
       case "testsell":    return startTestSell(ctx);
       case "home":        return sendHome(ctx);
       case "togglebond": {
@@ -255,16 +260,36 @@ async function cmdTrades(ctx: Context): Promise<void> {
   ctx.reply(msg, { parse_mode: "Markdown", ...backKeyboard() });
 }
 
-// ─── Wizard: Add Token ────────────────────────────────────────────────────────
+// ─── Auto CA Detection ────────────────────────────────────────────────────────
 
-function startAddToken(ctx: Context): void {
-  wizardState.set(ctx.chat!.id, { flow: "add_token", step: "await_mint" });
-  ctx.reply(
-    `➕ *Add a Token*\n\n` +
-    `Paste the token's *contract address* (mint).\n\n` +
-    `_The symbol will be pulled automatically from DexScreener._\n\n/cancel to go back`,
-    { parse_mode: "Markdown" }
-  );
+async function handleAutoAddCA(ctx: Context, mint: string): Promise<void> {
+  if (!callbacks) return;
+  const chatId = ctx.chat!.id;
+
+  // Check if already tracked
+  const existing = callbacks.getTokenList().find(t => t.mint === mint);
+  if (existing) {
+    ctx.reply(`ℹ️ *${existing.symbol}* is already being tracked.`, { parse_mode: "Markdown", ...backKeyboard() });
+    return;
+  }
+
+  ctx.reply("🔍 Looking up token on DexScreener...");
+  try {
+    const { symbol, marketCap } = await fetchTokenInfo(mint);
+    wizardState.set(chatId, { flow: "add_token", step: "await_avg_price", mint, symbol, marketCap });
+    ctx.reply(
+      `✅ Found *${symbol}*\n\n` +
+      `Current mcap: *${fmtMc(marketCap)}*\n\n` +
+      `What was your *average buy mcap*? _(e.g. \`25k\`, \`1.5m\`, \`45m\`)_\n\n/cancel to go back`,
+      { parse_mode: "Markdown" }
+    );
+  } catch {
+    ctx.reply(
+      `❌ Couldn't find that token on DexScreener.\n\n` +
+      `Make sure it has graduated and has an active pair, then try again.`,
+      backKeyboard()
+    );
+  }
 }
 
 // ─── Wizard: Remove Token ─────────────────────────────────────────────────────
@@ -285,7 +310,7 @@ function startRemoveToken(ctx: Context): void {
 
 // ─── Wizard: Settings ─────────────────────────────────────────────────────────
 
-function startSettings(ctx: Context): void {
+function startSettings(ctx: Context, showAll: boolean): void {
   if (!callbacks) return;
   const tokens = callbacks.getTokenList();
   if (tokens.length === 0) {
@@ -293,12 +318,22 @@ function startSettings(ctx: Context): void {
     return;
   }
   wizardState.set(ctx.chat!.id, { flow: "settings", step: "await_token" });
+
+  const PAGE = 5;
+  const hasMore = tokens.length > PAGE;
+  const visible = (!showAll && hasMore) ? tokens.slice(-PAGE) : tokens;
+  // visible tokens are a slice of the full list — compute their original indices
+  const offset = tokens.length - visible.length;
+
+  const rows = visible.map((t, vi) => [Markup.button.callback(t.symbol, `wiz:cfg_token:${offset + vi}`)]);
+  if (hasMore && !showAll) {
+    rows.push([Markup.button.callback("▼ Show all tokens", "cmd:settings_all")]);
+  }
+  rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
+
   ctx.reply("⚙️ *Settings* — Which token?", {
     parse_mode: "Markdown",
-    ...Markup.inlineKeyboard([
-      ...tokens.map((t, i) => [Markup.button.callback(t.symbol, `wiz:cfg_token:${i}`)]),
-      [Markup.button.callback("« Cancel", "cmd:home")],
-    ]),
+    ...Markup.inlineKeyboard(rows),
   });
 }
 
@@ -470,33 +505,6 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
 
   // ── ADD TOKEN ─────────────────────────────────────────────────────────────
   if (wizard.flow === "add_token") {
-    if (wizard.step === "await_mint") {
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
-        ctx.reply("❌ Doesn't look like a valid Solana address. Try again or /cancel.");
-        return;
-      }
-
-      ctx.reply("🔍 Looking up token on DexScreener...");
-
-      try {
-        const { symbol, marketCap } = await fetchTokenInfo(text);
-        wizardState.set(chatId, { flow: "add_token", step: "await_avg_price", mint: text, symbol, marketCap });
-        ctx.reply(
-          `✅ Found *${symbol}*\n\n` +
-          `Current mcap: *${fmtMarketCap(marketCap)}*\n\n` +
-          `What was your *average buy mcap*? _(e.g. \`25k\`, \`1.5m\`, \`45m\`)_\n\n/cancel to go back`,
-          { parse_mode: "Markdown" }
-        );
-      } catch (err) {
-        ctx.reply(
-          `❌ Couldn't find that token on DexScreener.\n\n` +
-          `Make sure it has graduated and has an active pair, then try again.\n\n/cancel to go back`
-        );
-        wizardState.set(chatId, { flow: "add_token", step: "await_mint" });
-      }
-      return;
-    }
-
     if (wizard.step === "await_avg_price") {
       const { mint, symbol } = wizard;
       const avgBuyMcap = parseMcap(text);
@@ -509,7 +517,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       wizardState.delete(chatId);
       const result = await callbacks!.addToken(mint, symbol, avgBuyMcap);
       ctx.reply(
-        result + `\n\nGrid floor set at avg buy mcap: *${fmtMarketCap(avgBuyMcap)}*\n\nUse ⚙️ Settings to adjust parameters.`,
+        result + `\n\nGrid floor set at avg buy mcap: *${fmtMc(avgBuyMcap)}*\n\nUse ⚙️ Settings to adjust parameters.`,
         {
           parse_mode: "Markdown",
           ...Markup.inlineKeyboard([
