@@ -396,33 +396,23 @@ function showSettingsForToken(ctx: Context, mint: string, symbol: string): void 
 async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: string): Promise<void> {
   const chatId = ctx.chat!.id;
 
-  // Remove token — pick
+  // Remove token — remove immediately and reopen the picker
   if (payload.startsWith("rm:") && wizard.flow === "remove_token") {
     const idx = parseInt(payload.split(":")[1], 10);
     const { mint, symbol } = callbacks!.getTokenList()[idx];
-    wizardState.set(chatId, { flow: "remove_token", step: "await_pick", pendingMint: mint, pendingSymbol: symbol } as any);
-    ctx.reply(`⚠️ Remove *${symbol}* and stop watching it?`, {
-      parse_mode: "Markdown",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Yes", "wiz:rm_confirm")],
-        [Markup.button.callback("❌ Cancel", "cmd:home")],
-      ]),
-    });
+    ctx.reply(callbacks!.removeToken(mint), { parse_mode: "Markdown" });
+    startRemoveToken(ctx);
     return;
   }
 
   if (payload === "reset_atl") {
     if (wizard?.flow === "settings" && (wizard.step === "await_field" || wizard.step === "await_value")) {
-      const result = callbacks!.resetAtl((wizard as any).mint);
-      ctx.reply(result, { parse_mode: "Markdown", ...backKeyboard() });
+      const { mint, symbol } = wizard as any;
+      const result = callbacks!.resetAtl(mint);
+      ctx.reply(result, { parse_mode: "Markdown" });
+      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      showSettingsForToken(ctx, mint, symbol);
     }
-    return;
-  }
-
-  if (payload === "rm_confirm") {
-    const w = wizard as any;
-    wizardState.delete(chatId);
-    ctx.reply(callbacks!.removeToken(w.pendingMint), { parse_mode: "Markdown", ...backKeyboard() });
     return;
   }
 
@@ -441,18 +431,13 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
 
     // priceTracking is a boolean toggle — handle immediately without text input
     if (rawField === "priceTracking") {
-      const tc = callbacks!.getConfig(wizard.mint)!;
+      const { mint, symbol } = wizard;
+      const tc = callbacks!.getConfig(mint)!;
       const newVal = !tc.priceTracking;
-      callbacks!.updateSettings(wizard.mint, { priceTracking: newVal });
-      wizardState.delete(chatId);
-      ctx.reply(
-        `📡 Price tracking *${newVal ? "enabled" : "disabled"}* for *${wizard.symbol}*.\n\n` +
-        (newVal ? `ATL alerts fire every \`${fmtMc(tc.atlAlertSpacingUsd)}\` drop.\nUpside alerts fire every \`+${tc.upsideAlertPct}%\` gain.\n\nAdjust via ⚙️ Settings.` : ""),
-        {
-          parse_mode: "Markdown",
-          ...Markup.inlineKeyboard([[Markup.button.callback("« Back to menu", "cmd:home")]]),
-        }
-      );
+      callbacks!.updateSettings(mint, { priceTracking: newVal });
+      ctx.reply(`📡 Price tracking *${newVal ? "enabled" : "disabled"}* for *${symbol}*.`, { parse_mode: "Markdown" });
+      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      showSettingsForToken(ctx, mint, symbol);
       return;
     }
 
@@ -572,7 +557,6 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       }
     }
 
-    wizardState.delete(chatId);
     const result = callbacks!.updateSettings(mint, { [field]: value });
 
     const fieldNames: Record<SettingsField, string> = {
@@ -590,15 +574,11 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
     };
 
     ctx.reply(
-      `${result}\n\n*${fieldNames[field]}* set to \`${field === "levelSpacingUsd" ? fmtMc(value!) : value ?? "cleared"}\`\n\nThe grid will rebuild on the next price tick.`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("⚙️ Change another setting", "cmd:settings")],
-          [Markup.button.callback("« Back to menu",            "cmd:home")],
-        ]),
-      }
+      `${result}\n\n*${fieldNames[field]}* set to \`${field === "levelSpacingUsd" ? fmtMc(value!) : value ?? "cleared"}\``,
+      { parse_mode: "Markdown" }
     );
+    wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+    showSettingsForToken(ctx, mint, symbol);
     return;
   }
 }
