@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { BotConfig, BotState, TokenState, TradeRecord } from "./types";
-import { loadKeypair, getTokenBalance, getTokenDecimals, toUiAmount } from "./wallet";
+import { loadKeypair, getSolBalance, getTokenBalance, getAllTokenBalances, getTokenDecimals, toUiAmount } from "./wallet";
 import { startPriceFeed, stopPriceFeed, stopAllFeeds, fmtMarketCap } from "./price";
 import { processMarketCap, fmtMc } from "./consolidation";
 import { executeSell } from "./executor";
@@ -356,12 +356,25 @@ async function main(): Promise<void> {
     tokens: config.tokens.map((t) => t.symbol),
   });
 
-  // ── Heartbeat every 2 minutes ─────────────────────────────────────────────
-  let iter = 0;
+  // ── Poll SOL + token balances on startup and every 5 minutes ────────────
+  async function refreshBalances() {
+    try {
+      state.solBalance = await getSolBalance(connection);
+      const balances = await getAllTokenBalances(connection, mints);
+      for (const [mint, amount] of balances) {
+        const ts = state.tokens.get(mint);
+        if (ts) ts.balance = amount;
+      }
+      logger.info("Balances refreshed", { sol: state.solBalance.toFixed(4), trades: state.totalTradesExecuted });
+    } catch (err) {
+      logger.error("Balance refresh error", { error: String(err) });
+    }
+  }
+
+  await refreshBalances();
   while (true) {
-    iter++;
-    if (iter % 1 === 0) logger.info("Heartbeat", { trades: state.totalTradesExecuted });
-    await new Promise((r) => setTimeout(r, 120_000));
+    await new Promise((r) => setTimeout(r, 300_000));
+    await refreshBalances();
   }
 }
 
