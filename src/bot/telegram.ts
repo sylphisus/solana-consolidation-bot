@@ -110,7 +110,7 @@ function mainMenuKeyboard() {
     ? "🔗 Bond Monitor: ON"
     : "🔗 Bond Monitor: OFF";
   return Markup.inlineKeyboard([
-    [Markup.button.callback("📊 Status",        "cmd:status")],
+    [Markup.button.callback("🪙 Tokens",        "cmd:status")],
     [Markup.button.callback("📋 Trade History", "cmd:trades")],
     [Markup.button.callback("➕ Add Token",     "cmd:addtoken"),
      Markup.button.callback("🗑 Remove Token",  "cmd:removetoken")],
