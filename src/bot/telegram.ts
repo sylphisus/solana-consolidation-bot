@@ -175,7 +175,8 @@ This will sell your ENTIRE balance immediately.`,
     switch (data.slice(4)) {
       case "status":      return cmdStatus(ctx);
       case "trades":      return cmdTrades(ctx);
-      case "removetoken": return startRemoveToken(ctx);
+      case "removetoken":     return startRemoveToken(ctx, false);
+      case "removetoken_all": return startRemoveToken(ctx, true);
       case "settings":     return startSettings(ctx, false);
       case "settings_all": return startSettings(ctx, true);
       case "testsell":    return startTestSell(ctx);
@@ -294,17 +295,25 @@ async function handleAutoAddCA(ctx: Context, mint: string): Promise<void> {
 
 // ─── Wizard: Remove Token ─────────────────────────────────────────────────────
 
-function startRemoveToken(ctx: Context): void {
+function startRemoveToken(ctx: Context, showAll: boolean = false): void {
   if (!callbacks) return;
   const tokens = callbacks.getTokenList();
   if (tokens.length === 0) { ctx.reply("No tokens to remove.", backKeyboard()); return; }
   wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
+
+  const PAGE = 10;
+  const hasMore = tokens.length > PAGE;
+  const visible = (!showAll && hasMore) ? tokens.slice(0, PAGE) : tokens;
+
+  const rows = visible.map((t, i) => [Markup.button.callback(t.symbol, `wiz:rm:${i}`)]);
+  if (hasMore && !showAll) {
+    rows.push([Markup.button.callback("▼ Show all tokens", "cmd:removetoken_all")]);
+  }
+  rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
+
   ctx.reply("🗑 *Remove a Token*", {
     parse_mode: "Markdown",
-    ...Markup.inlineKeyboard([
-      ...tokens.map((t, i) => [Markup.button.callback(t.symbol, `wiz:rm:${i}`)]),
-      [Markup.button.callback("« Cancel", "cmd:home")],
-    ]),
+    ...Markup.inlineKeyboard(rows),
   });
 }
 
