@@ -346,6 +346,51 @@ function startSettings(ctx: Context, showAll: boolean): void {
   });
 }
 
+// ─── Settings Field Display ───────────────────────────────────────────────────
+
+function showSettingsForToken(ctx: Context, mint: string, symbol: string): void {
+  const tc = callbacks!.getConfig(mint)!;
+  ctx.reply(
+    `⚙️ *Settings for ${symbol}*\n\n` +
+    `Current values:\n` +
+    `• Avg buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`\n` +
+    `• Level spacing: \`${fmtMc(tc.levelSpacingUsd)}\`\n` +
+    `• Touch threshold: \`${tc.touchThreshold}\`\n` +
+    `• Hysteresis: \`${tc.hysteresisUsd != null ? "$" + fmtMc(tc.hysteresisUsd) : "±" + tc.hysteresisPct + "%"}\`\n` +
+    `• Time-gate: \`${tc.minSecsBetweenTouches}s\`\n` +
+    `• Invalidation: \`+${tc.invalidationPct}%\`\n` +
+    `• Sell amount: \`${tc.sellPct ?? 100}%\` of balance\n` +
+    `• Min profit to sell: \`${tc.minProfitPct != null ? "+" + tc.minProfitPct + "%" : "disabled"}\`\n` +
+    `• Price tracking: \`${tc.priceTracking ? "ON" : "OFF"}\`\n` +
+    (tc.priceTracking
+      ? `  ↳ ATL alert every: \`${fmtMc(tc.atlAlertSpacingUsd)}\`\n` +
+        `  ↳ Upside alert at: \`+${tc.upsideAlertPct}%\`\n`
+      : "") +
+    `\nWhich setting do you want to change?`,
+    {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("💵 Avg Buy Mcap",      "wiz:field:buyMcap")],
+        [Markup.button.callback("📏 Level Spacing",    "wiz:field:levelSpacingUsd")],
+        [Markup.button.callback("👆 Touch Threshold",  "wiz:field:touchThreshold")],
+        [Markup.button.callback("↔️ Hysteresis %",     "wiz:field:hysteresisPct")],
+        [Markup.button.callback("↔️ Hysteresis $",     "wiz:field:hysteresisUsd")],
+        [Markup.button.callback("⏱ Time-gate (secs)", "wiz:field:minSecsBetweenTouches")],
+        [Markup.button.callback("🚫 Invalidation %",   "wiz:field:invalidationPct")],
+        [Markup.button.callback("💰 Min Profit %",     "wiz:field:minProfitPct")],
+        [Markup.button.callback("📤 Sell Amount %",    "wiz:field:sellPct")],
+        [Markup.button.callback(tc.priceTracking ? "📡 Price Tracking: ON  (tap to disable)" : "📡 Price Tracking: OFF  (tap to enable)", "wiz:field:priceTracking")],
+        ...(tc.priceTracking ? [
+          [Markup.button.callback("🔻 ATL Alert Spacing", "wiz:field:atlAlertSpacingUsd")],
+          [Markup.button.callback("🚀 Upside Alert %",    "wiz:field:upsideAlertPct")],
+          [Markup.button.callback("🔄 Reset ATL",         "wiz:reset_atl")],
+        ] : []),
+        [Markup.button.callback("« Back to menu", "cmd:home")],
+      ]),
+    }
+  );
+}
+
 // ─── Wizard Button Handler ────────────────────────────────────────────────────
 
 async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: string): Promise<void> {
@@ -385,47 +430,8 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
   if (payload.startsWith("cfg_token:") && wizard.flow === "settings") {
     const idx = parseInt(payload.split(":")[1], 10);
     const { mint, symbol } = callbacks!.getTokenList()[idx];
-    const tc = callbacks!.getConfig(mint)!;
     wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
-    ctx.reply(
-      `⚙️ *Settings for ${symbol}*\n\n` +
-      `Current values:\n` +
-      `• Avg buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`\n` +
-      `• Level spacing: \`${fmtMc(tc.levelSpacingUsd)}\`\n` +
-      `• Touch threshold: \`${tc.touchThreshold}\`\n` +
-      `• Hysteresis: \`${tc.hysteresisUsd != null ? "$" + fmtMc(tc.hysteresisUsd) : "±" + tc.hysteresisPct + "%"}\`\n` +
-      `• Time-gate: \`${tc.minSecsBetweenTouches}s\`\n` +
-      `• Invalidation: \`+${tc.invalidationPct}%\`\n` +
-      `• Sell amount: \`${tc.sellPct ?? 100}%\` of balance\n` +
-      `• Min profit to sell: \`${tc.minProfitPct != null ? "+" + tc.minProfitPct + "%" : "disabled"}\`\n` +
-      `• Price tracking: \`${tc.priceTracking ? "ON" : "OFF"}\`\n` +
-      (tc.priceTracking
-        ? `  ↳ ATL alert every: \`${fmtMc(tc.atlAlertSpacingUsd)}\`\n` +
-          `  ↳ Upside alert at: \`+${tc.upsideAlertPct}%\`\n`
-        : "") +
-      `\nWhich setting do you want to change?`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("💵 Avg Buy Mcap",      "wiz:field:buyMcap")],
-          [Markup.button.callback("📏 Level Spacing",    "wiz:field:levelSpacingUsd")],
-          [Markup.button.callback("👆 Touch Threshold",  "wiz:field:touchThreshold")],
-          [Markup.button.callback("↔️ Hysteresis %",     "wiz:field:hysteresisPct")],
-          [Markup.button.callback("↔️ Hysteresis $",     "wiz:field:hysteresisUsd")],
-          [Markup.button.callback("⏱ Time-gate (secs)", "wiz:field:minSecsBetweenTouches")],
-          [Markup.button.callback("🚫 Invalidation %",   "wiz:field:invalidationPct")],
-          [Markup.button.callback("💰 Min Profit %",     "wiz:field:minProfitPct")],
-          [Markup.button.callback("📤 Sell Amount %",    "wiz:field:sellPct")],
-          [Markup.button.callback(tc.priceTracking ? "📡 Price Tracking: ON  (tap to disable)" : "📡 Price Tracking: OFF  (tap to enable)", "wiz:field:priceTracking")],
-          ...(tc.priceTracking ? [
-            [Markup.button.callback("🔻 ATL Alert Spacing", "wiz:field:atlAlertSpacingUsd")],
-            [Markup.button.callback("🚀 Upside Alert %",    "wiz:field:upsideAlertPct")],
-            [Markup.button.callback("🔄 Reset ATL",         "wiz:reset_atl")],
-          ] : []),
-          [Markup.button.callback("« Cancel",            "cmd:home")],
-        ]),
-      }
-    );
+    showSettingsForToken(ctx, mint, symbol);
     return;
   }
 
@@ -525,16 +531,9 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
 
       wizardState.delete(chatId);
       const result = await callbacks!.addToken(mint, symbol, avgBuyMcap);
-      ctx.reply(
-        result + `\n\nGrid floor set at avg buy mcap: *${fmtMc(avgBuyMcap)}*\n\nUse ⚙️ Settings to adjust parameters.`,
-        {
-          parse_mode: "Markdown",
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback("⚙️ Configure settings", "cmd:settings")],
-            [Markup.button.callback("« Back to menu",        "cmd:home")],
-          ]),
-        }
-      );
+      ctx.reply(result + `\n\nGrid floor set at avg buy mcap: *${fmtMc(avgBuyMcap)}*`, { parse_mode: "Markdown" });
+      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      showSettingsForToken(ctx, mint, symbol);
       return;
     }
   }
