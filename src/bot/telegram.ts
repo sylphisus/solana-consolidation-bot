@@ -81,6 +81,7 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("trades",      cmdTrades);
   bot.command("removetoken", (ctx) => startRemoveToken(ctx));
   bot.command("settings",    (ctx) => startSettings(ctx, false));
+  bot.command("fetch",       cmdFetch);
 
   bot.on("callback_query", async (ctx) => {
     await ctx.answerCbQuery();
@@ -259,6 +260,22 @@ async function cmdTrades(ctx: Context): Promise<void> {
     msg += "\n";
   }
   ctx.reply(msg, { parse_mode: "Markdown", ...backKeyboard() });
+}
+
+async function cmdFetch(ctx: Context): Promise<void> {
+  if (!callbacks) return;
+  const query = ((ctx.message as any)?.text ?? "").replace(/^\/fetch\s*/i, "").trim().toUpperCase();
+  if (!query) {
+    ctx.reply("Usage: `/fetch SYMBOL` — e.g. `/fetch WIF`", { parse_mode: "Markdown" });
+    return;
+  }
+  const matches = callbacks.getTokenList().filter(t => t.symbol.toUpperCase() === query);
+  if (matches.length === 0) {
+    ctx.reply(`❌ No tracked token found with symbol *${query}*.`, { parse_mode: "Markdown" });
+    return;
+  }
+  const lines = matches.map(t => `*${t.symbol}*\n\`${t.mint}\``).join("\n\n");
+  ctx.reply(lines, { parse_mode: "Markdown" });
 }
 
 // ─── Auto CA Detection ────────────────────────────────────────────────────────
