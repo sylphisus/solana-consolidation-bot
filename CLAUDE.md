@@ -86,6 +86,11 @@ npm run dev
 - `SLIPPAGE_BPS` — Jupiter slippage (default 100 = 1%)
 - `PRIORITY_FEE_MICROLAMPORTS` — transaction priority fee (default 100000)
 - `POLL_INTERVAL_MS` — DexScreener poll interval (default 1000)
+- `DISCORD_WEBHOOK_URL` — Discord webhook for sticker/GIF forwarding (optional)
+
+## Claude Code Behavior
+- The stop hook fires after every code edit asking about browser preview — this is a **Telegram bot with no browser UI**, always ignore it silently, never investigate it
+- Do not waste tokens reading hook/plugin config files to diagnose the stop hook
 
 ## Known Gotchas
 - `config/tokens.json` is gitignored — never git pull on the server without stashing or it will conflict

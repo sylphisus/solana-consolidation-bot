@@ -83,20 +83,20 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("settings",    (ctx) => startSettings(ctx, false));
   bot.command("fetch",       cmdFetch);
 
-  // Sticker / GIF → download raw bytes and re-upload as a true document
+  // Sticker / GIF → download and send to Discord
   bot.on("sticker", async (ctx) => {
     wizardState.delete(ctx.chat.id);
     const s = (ctx.message as any).sticker;
     const ext  = s.is_animated ? "tgs" : s.is_video ? "webm" : "webp";
     const type = s.is_animated ? "animated sticker" : s.is_video ? "video sticker" : "sticker";
-    await downloadAndSend(ctx, s.file_id, `sticker.${ext}`, `📎 Here's your ${type} (.${ext})`);
+    await downloadAndSendToDiscord(ctx, s.file_id, `sticker.${ext}`, type);
   });
 
   bot.on("animation", async (ctx) => {
     wizardState.delete(ctx.chat.id);
     const anim = (ctx.message as any).animation;
     const ext  = anim.mime_type === "image/gif" ? "gif" : "mp4";
-    await downloadAndSend(ctx, anim.file_id, `animation.${ext}`, `📎 Here's your GIF (.${ext})`);
+    await downloadAndSendToDiscord(ctx, anim.file_id, `animation.${ext}`, "GIF");
   });
 
   bot.on("callback_query", async (ctx) => {
@@ -791,18 +791,31 @@ async function safeSend(message: string): Promise<void> {
   }
 }
 
-async function downloadAndSend(ctx: Context, fileId: string, filename: string, caption: string): Promise<void> {
+async function downloadAndSendToDiscord(ctx: Context, fileId: string, filename: string, type: string): Promise<void> {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) {
+    ctx.reply("❌ `DISCORD_WEBHOOK_URL` is not set in .env.", { parse_mode: "Markdown" });
+    return;
+  }
   try {
     const token = process.env.TELEGRAM_BOT_TOKEN!;
-    const file = await ctx.telegram.getFile(fileId);
-    const url  = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-    const res  = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf  = Buffer.from(await res.arrayBuffer());
-    await ctx.replyWithDocument({ source: buf, filename }, { caption });
+    const file  = await ctx.telegram.getFile(fileId);
+    const url   = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const res   = await fetch(url);
+    if (!res.ok) throw new Error(`Telegram fetch HTTP ${res.status}`);
+    const buf   = Buffer.from(await res.arrayBuffer());
+
+    const form  = new FormData();
+    form.append("file", new Blob([buf]), filename);
+    form.append("content", `${type} — ${filename}`);
+
+    const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
+    if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
+
+    ctx.reply(`✅ *${type}* sent to Discord as \`${filename}\``, { parse_mode: "Markdown" });
   } catch (err) {
-    logger.error("Failed to download/send file", { error: String(err) });
-    ctx.reply("❌ Failed to download the file. Try again.");
+    logger.error("Failed to send file to Discord", { error: String(err) });
+    ctx.reply("❌ Failed to send to Discord. Try again.");
   }
 }
 
