@@ -369,10 +369,12 @@ function startSettings(ctx: Context, showAll: boolean): void {
 
 function showSettingsForToken(ctx: Context, mint: string, symbol: string): void {
   const tc = callbacks!.getConfig(mint)!;
+  const ts = callbacks!.getState().tokens.get(mint);
   ctx.reply(
     `⚙️ *Settings for ${symbol}*\n\n` +
     `Current values:\n` +
     `• Avg buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`\n` +
+    `• ATL: \`${ts?.allTimeLow != null ? fmtMc(ts.allTimeLow) : "not set"}\`\n` +
     `• Level spacing: \`${fmtMc(tc.levelSpacingUsd)}\`\n` +
     `• Touch threshold: \`${tc.touchThreshold}\`\n` +
     `• Hysteresis: \`${tc.hysteresisUsd != null ? "$" + fmtMc(tc.hysteresisUsd) : "±" + tc.hysteresisPct + "%"}\`\n` +
