@@ -10,4 +10,4 @@ if len(sys.argv) != 3:
 with open(sys.argv[1], "rb") as f:
     animation = lottie.parsers.tgs.parse_tgs(f)
 
-export_gif(animation, sys.argv[2], skip_frames=2)
+export_gif(animation, sys.argv[2])
