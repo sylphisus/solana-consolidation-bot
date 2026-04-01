@@ -85,6 +85,7 @@ function registerHandlers(bot: Telegraf): void {
 
   // Sticker / GIF → send back as downloadable file
   bot.on("sticker", async (ctx) => {
+    wizardState.delete(ctx.chat.id);
     const s = (ctx.message as any).sticker;
     const fileId = s.file_id;
     const type = s.is_animated ? "animated sticker (.tgs)" : s.is_video ? "video sticker (.webm)" : "sticker (.webp)";
@@ -92,6 +93,7 @@ function registerHandlers(bot: Telegraf): void {
   });
 
   bot.on("animation", async (ctx) => {
+    wizardState.delete(ctx.chat.id);
     const fileId = (ctx.message as any).animation.file_id;
     await ctx.replyWithDocument(fileId, { caption: "📎 Here's your GIF (.mp4)" });
   });
