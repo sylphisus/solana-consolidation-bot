@@ -61,15 +61,23 @@ export function initTelegram(cb: TelegramCallbacks): void {
   authorizedChatId = parseInt(chatIdStr, 10);
   if (isNaN(authorizedChatId)) throw new Error("TELEGRAM_CHAT_ID must be a number");
 
+  const guestChatIdStr = process.env.GUEST_CHAT_ID;
+  const guestChatId = guestChatIdStr ? parseInt(guestChatIdStr, 10) : null;
+
   callbacks = cb;
   tg = new Telegraf(token);
 
   tg.use(async (ctx, next) => {
-    if (ctx.chat?.id !== authorizedChatId) {
-      logger.warn("Unauthorized Telegram access", { chatId: ctx.chat?.id });
-      return;
+    const chatId = ctx.chat?.id;
+    if (chatId === authorizedChatId) return next();
+
+    // Guest gets sticker/animation access only
+    if (guestChatId && chatId === guestChatId) {
+      const msg = ctx.message as any;
+      if (msg?.sticker || msg?.animation) return next();
     }
-    return next();
+
+    logger.warn("Unauthorized Telegram access", { chatId });
   });
 
   registerHandlers(tg);

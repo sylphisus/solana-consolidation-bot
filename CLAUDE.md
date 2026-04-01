@@ -87,6 +87,7 @@ npm run dev
 - `PRIORITY_FEE_MICROLAMPORTS` — transaction priority fee (default 100000)
 - `POLL_INTERVAL_MS` — DexScreener poll interval (default 1000)
 - `DISCORD_WEBHOOK_URL` — Discord webhook for sticker/GIF forwarding (optional)
+- `GUEST_CHAT_ID` — optional second Telegram user ID with sticker/GIF access only
 
 ## Claude Code Behavior
 - The stop hook fires after every code edit asking about browser preview — this is a **Telegram bot with no browser UI**, always ignore it silently, never investigate it
