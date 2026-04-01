@@ -90,15 +90,17 @@ function registerHandlers(bot: Telegraf): void {
   });
 
   bot.on("text", async (ctx) => {
-    const wizard = wizardState.get(ctx.chat.id);
-    if (wizard) { await handleWizardInput(ctx, wizard); return; }
-
-    // Auto-detect contract address — kick off add-token flow immediately
     const text = ((ctx.message as any)?.text ?? "").trim();
+
+    // CA detection takes priority over any active wizard state
     if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+      wizardState.delete(ctx.chat.id);
       await handleAutoAddCA(ctx, text);
       return;
     }
+
+    const wizard = wizardState.get(ctx.chat.id);
+    if (wizard) { await handleWizardInput(ctx, wizard); return; }
 
     ctx.reply("Send /help to see the menu.", mainMenuKeyboard());
   });
