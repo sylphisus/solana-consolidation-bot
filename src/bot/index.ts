@@ -339,15 +339,18 @@ async function main(): Promise<void> {
     config.tokens.map((t) => t.symbol)
   );
 
-  // Start price feeds for all tokens — staggered to avoid RPC burst on startup
-  for (const mint of mints) {
-    await watchToken(mint, config, state, connection, keypair, sellInProgress)
-      .catch((err) => {
-        const sym = config.tokens.find((t) => t.mint === mint)?.symbol ?? mint.slice(0, 8);
-        logger.error(`Failed to watch ${sym}`, { error: String(err) });
-      });
-    await new Promise((r) => setTimeout(r, 150));
-  }
+  // Start price feeds — staggered at 200ms apart (2 RPC calls each = 10 RPC/s)
+  // Fired concurrently so total startup time = (n-1)*200ms + last token's init time
+  await Promise.all(
+    mints.map((mint, i) =>
+      new Promise<void>((r) => setTimeout(r, i * 200))
+        .then(() => watchToken(mint, config, state, connection, keypair, sellInProgress))
+        .catch((err) => {
+          const sym = config.tokens.find((t) => t.mint === mint)?.symbol ?? mint.slice(0, 8);
+          logger.error(`Failed to watch ${sym}`, { error: String(err) });
+        })
+    )
+  );
 
   logger.info(`Bot live — polling every ${POLL_INTERVAL_MS}ms via DexScreener`, {
     wallet: keypair.publicKey.toBase58(),
