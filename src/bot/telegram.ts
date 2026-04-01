@@ -83,19 +83,20 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("settings",    (ctx) => startSettings(ctx, false));
   bot.command("fetch",       cmdFetch);
 
-  // Sticker / GIF → send back as downloadable file
+  // Sticker / GIF → download raw bytes and re-upload as a true document
   bot.on("sticker", async (ctx) => {
     wizardState.delete(ctx.chat.id);
     const s = (ctx.message as any).sticker;
-    const fileId = s.file_id;
-    const type = s.is_animated ? "animated sticker (.tgs)" : s.is_video ? "video sticker (.webm)" : "sticker (.webp)";
-    await ctx.replyWithDocument(fileId, { caption: `📎 Here's your ${type}` });
+    const ext  = s.is_animated ? "tgs" : s.is_video ? "webm" : "webp";
+    const type = s.is_animated ? "animated sticker" : s.is_video ? "video sticker" : "sticker";
+    await downloadAndSend(ctx, s.file_id, `sticker.${ext}`, `📎 Here's your ${type} (.${ext})`);
   });
 
   bot.on("animation", async (ctx) => {
     wizardState.delete(ctx.chat.id);
-    const fileId = (ctx.message as any).animation.file_id;
-    await ctx.replyWithDocument(fileId, { caption: "📎 Here's your GIF (.mp4)" });
+    const anim = (ctx.message as any).animation;
+    const ext  = anim.mime_type === "image/gif" ? "gif" : "mp4";
+    await downloadAndSend(ctx, anim.file_id, `animation.${ext}`, `📎 Here's your GIF (.${ext})`);
   });
 
   bot.on("callback_query", async (ctx) => {
@@ -787,6 +788,21 @@ async function safeSend(message: string): Promise<void> {
     } as any);
   } catch (err) {
     logger.error("Failed to send Telegram message", { error: String(err) });
+  }
+}
+
+async function downloadAndSend(ctx: Context, fileId: string, filename: string, caption: string): Promise<void> {
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN!;
+    const file = await ctx.telegram.getFile(fileId);
+    const url  = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const res  = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf  = Buffer.from(await res.arrayBuffer());
+    await ctx.replyWithDocument({ source: buf, filename }, { caption });
+  } catch (err) {
+    logger.error("Failed to download/send file", { error: String(err) });
+    ctx.reply("❌ Failed to download the file. Try again.");
   }
 }
 
