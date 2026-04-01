@@ -4,6 +4,15 @@ import { toUiAmount } from "./wallet";
 import { fetchTokenInfo } from "./price";
 import { getHottestLevels, fmtMc } from "./consolidation";
 import { logger } from "./logger";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import os from "os";
+import path from "path";
+import crypto from "crypto";
+import fs from "fs";
+
+const execFileAsync = promisify(execFile);
+const TGS_SCRIPT = path.join(process.cwd(), "scripts", "tgs_to_gif.py");
 
 // ─── Callbacks ────────────────────────────────────────────────────────────────
 
@@ -87,9 +96,13 @@ function registerHandlers(bot: Telegraf): void {
   bot.on("sticker", async (ctx) => {
     wizardState.delete(ctx.chat.id);
     const s = (ctx.message as any).sticker;
-    const ext  = s.is_animated ? "tgs" : s.is_video ? "webm" : "webp";
-    const type = s.is_animated ? "animated sticker" : s.is_video ? "video sticker" : "sticker";
-    await downloadAndSendToDiscord(ctx, s.file_id, `sticker.${ext}`, type);
+    if (s.is_animated) {
+      await downloadConvertAndSend(ctx, s.file_id);
+    } else {
+      const ext  = s.is_video ? "webm" : "webp";
+      const type = s.is_video ? "video sticker" : "sticker";
+      await downloadAndSendToDiscord(ctx, s.file_id, `sticker.${ext}`, type);
+    }
   });
 
   bot.on("animation", async (ctx) => {
@@ -788,6 +801,42 @@ async function safeSend(message: string): Promise<void> {
     } as any);
   } catch (err) {
     logger.error("Failed to send Telegram message", { error: String(err) });
+  }
+}
+
+async function downloadConvertAndSend(ctx: Context, fileId: string): Promise<void> {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) { ctx.reply("❌ `DISCORD_WEBHOOK_URL` is not set in .env.", { parse_mode: "Markdown" }); return; }
+
+  const tmpId  = crypto.randomBytes(8).toString("hex");
+  const inPath  = path.join(os.tmpdir(), `${tmpId}.tgs`);
+  const outPath = path.join(os.tmpdir(), `${tmpId}.gif`);
+
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN!;
+    const file  = await ctx.telegram.getFile(fileId);
+    const url   = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const res   = await fetch(url);
+    if (!res.ok) throw new Error(`Telegram fetch HTTP ${res.status}`);
+    fs.writeFileSync(inPath, Buffer.from(await res.arrayBuffer()));
+
+    await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 30_000 });
+
+    const gif  = fs.readFileSync(outPath);
+    const form = new FormData();
+    form.append("file", new Blob([gif], { type: "image/gif" }), "sticker.gif");
+    form.append("content", "animated sticker — sticker.gif");
+
+    const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
+    if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
+
+    ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.gif`", { parse_mode: "Markdown" });
+  } catch (err) {
+    logger.error("TGS conversion/send failed", { error: String(err) });
+    ctx.reply("❌ Failed to convert sticker. Try again.");
+  } finally {
+    try { fs.unlinkSync(inPath); } catch {}
+    try { fs.unlinkSync(outPath); } catch {}
   }
 }
 
