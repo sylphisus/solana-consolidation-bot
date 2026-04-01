@@ -105,11 +105,11 @@ function registerHandlers(bot: Telegraf): void {
     wizardState.delete(ctx.chat.id);
     const s = (ctx.message as any).sticker;
     if (s.is_animated) {
-      await downloadConvertAndSend(ctx, s.file_id);
+      await downloadConvertTgsAndSend(ctx, s.file_id);
+    } else if (s.is_video) {
+      await downloadConvertWebmAndSend(ctx, s.file_id);
     } else {
-      const ext  = s.is_video ? "webm" : "webp";
-      const type = s.is_video ? "video sticker" : "sticker";
-      await downloadAndSendToDiscord(ctx, s.file_id, `sticker.${ext}`, type);
+      await downloadAndSendToDiscord(ctx, s.file_id, "sticker.webp", "sticker");
     }
   });
 
@@ -812,7 +812,7 @@ async function safeSend(message: string): Promise<void> {
   }
 }
 
-async function downloadConvertAndSend(ctx: Context, fileId: string): Promise<void> {
+async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<void> {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) { ctx.reply("❌ `DISCORD_WEBHOOK_URL` is not set in .env.", { parse_mode: "Markdown" }); return; }
 
@@ -841,6 +841,47 @@ async function downloadConvertAndSend(ctx: Context, fileId: string): Promise<voi
     ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.gif`", { parse_mode: "Markdown" });
   } catch (err) {
     logger.error("TGS conversion/send failed", { error: String(err) });
+    ctx.reply("❌ Failed to convert sticker. Try again.");
+  } finally {
+    try { fs.unlinkSync(inPath); } catch {}
+    try { fs.unlinkSync(outPath); } catch {}
+  }
+}
+
+async function downloadConvertWebmAndSend(ctx: Context, fileId: string): Promise<void> {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) { ctx.reply("❌ `DISCORD_WEBHOOK_URL` is not set in .env.", { parse_mode: "Markdown" }); return; }
+
+  const tmpId   = crypto.randomBytes(8).toString("hex");
+  const inPath  = path.join(os.tmpdir(), `${tmpId}.webm`);
+  const outPath = path.join(os.tmpdir(), `${tmpId}.gif`);
+
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN!;
+    const file  = await ctx.telegram.getFile(fileId);
+    const url   = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const res   = await fetch(url);
+    if (!res.ok) throw new Error(`Telegram fetch HTTP ${res.status}`);
+    fs.writeFileSync(inPath, Buffer.from(await res.arrayBuffer()));
+
+    await execFileAsync("ffmpeg", [
+      "-i", inPath,
+      "-vf", "fps=15,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+      "-loop", "0",
+      outPath,
+    ], { timeout: 30_000 });
+
+    const gif  = fs.readFileSync(outPath);
+    const form = new FormData();
+    form.append("file", new Blob([gif], { type: "image/gif" }), "sticker.gif");
+    form.append("content", "video sticker — sticker.gif");
+
+    const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
+    if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
+
+    ctx.reply("✅ *Video sticker* sent to Discord as `sticker.gif`", { parse_mode: "Markdown" });
+  } catch (err) {
+    logger.error("WebM conversion/send failed", { error: String(err) });
     ctx.reply("❌ Failed to convert sticker. Try again.");
   } finally {
     try { fs.unlinkSync(inPath); } catch {}
