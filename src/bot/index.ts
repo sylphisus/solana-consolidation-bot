@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { BotConfig, BotState, TokenState, TradeRecord } from "./types";
-import { loadKeypair, getSolBalance, getTokenBalance, getAllTokenBalances, getTokenDecimals, toUiAmount } from "./wallet";
+import { loadKeypair, getSolBalance, getTokenBalance, getAllTokenBalances, getTokenDecimals, toUiAmount, loadTokenCache, saveTokenCache, isTokenCached } from "./wallet";
 import { startPriceFeed, stopPriceFeed, stopAllFeeds } from "./price";
 import { processMarketCap, fmtMc } from "./consolidation";
 import { executeSell } from "./executor";
@@ -213,6 +213,7 @@ async function watchToken(
 
 async function main(): Promise<void> {
   logger.info("Solana Consolidation Bot starting...");
+  loadTokenCache();
 
   const config   = loadConfig();
   const keypair  = loadKeypair();
@@ -339,17 +340,19 @@ async function main(): Promise<void> {
     config.tokens.map((t) => t.symbol)
   );
 
-  // Start price feeds — staggered at 200ms apart (2 RPC calls each = 10 RPC/s)
-  // Fired concurrently so total startup time = (n-1)*200ms + last token's init time
+  // Cached tokens (warm restart) start instantly with no delay.
+  // Uncached tokens (first boot or new addition) stagger at 200ms each = 10 RPC/s.
+  let coldIndex = 0;
   await Promise.all(
-    mints.map((mint, i) =>
-      new Promise<void>((r) => setTimeout(r, i * 200))
+    mints.map((mint) => {
+      const delay = isTokenCached(mint) ? 0 : (coldIndex++ * 200);
+      return new Promise<void>((r) => setTimeout(r, delay))
         .then(() => watchToken(mint, config, state, connection, keypair, sellInProgress))
         .catch((err) => {
           const sym = config.tokens.find((t) => t.mint === mint)?.symbol ?? mint.slice(0, 8);
           logger.error(`Failed to watch ${sym}`, { error: String(err) });
-        })
-    )
+        });
+    })
   );
 
   logger.info(`Bot live — polling every ${POLL_INTERVAL_MS}ms via DexScreener`, {
@@ -379,8 +382,8 @@ async function main(): Promise<void> {
   }
 }
 
-process.on("SIGINT",  () => { logger.info("Shutting down..."); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
-process.on("SIGTERM", () => { logger.info("Shutting down..."); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
+process.on("SIGINT",  () => { logger.info("Shutting down..."); saveTokenCache(); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
+process.on("SIGTERM", () => { logger.info("Shutting down..."); saveTokenCache(); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
 process.on("uncaughtException", (err) => {
   logger.error("Uncaught exception", { error: err.message }); stopAllFeeds(); process.exit(1);
 });

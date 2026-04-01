@@ -14,6 +14,8 @@ import {
   TokenInvalidAccountOwnerError,
 } from "@solana/spl-token";
 import bs58 from "bs58";
+import fs from "fs";
+import path from "path";
 import { logger } from "./logger";
 
 // ─── Keypair ──────────────────────────────────────────────────────────────────
@@ -50,6 +52,45 @@ export async function getSolBalance(connection: Connection): Promise<number> {
 // We detect which program owns the mint so ATA lookups use the right one.
 
 const _programCache = new Map<string, PublicKey>();
+const _decimalsCache = new Map<string, number>();
+
+const CACHE_PATH = path.join(process.cwd(), "config", "token-cache.json");
+
+export function loadTokenCache(): void {
+  try {
+    if (!fs.existsSync(CACHE_PATH)) return;
+    const data = JSON.parse(fs.readFileSync(CACHE_PATH, "utf-8"));
+    for (const [mint, isToken2022] of Object.entries(data.programs ?? {})) {
+      _programCache.set(mint, isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID);
+    }
+    for (const [mint, decimals] of Object.entries(data.decimals ?? {})) {
+      _decimalsCache.set(mint, decimals as number);
+    }
+    logger.info(`Token cache loaded — ${_programCache.size} entries`);
+  } catch (err) {
+    logger.warn("Failed to load token cache", { error: String(err) });
+  }
+}
+
+export function saveTokenCache(): void {
+  try {
+    const programs: Record<string, boolean> = {};
+    for (const [mint, program] of _programCache) {
+      programs[mint] = program.equals(TOKEN_2022_PROGRAM_ID);
+    }
+    const decimals: Record<string, number> = {};
+    for (const [mint, d] of _decimalsCache) {
+      decimals[mint] = d;
+    }
+    fs.writeFileSync(CACHE_PATH, JSON.stringify({ programs, decimals }, null, 2));
+  } catch (err) {
+    logger.warn("Failed to save token cache", { error: String(err) });
+  }
+}
+
+export function isTokenCached(mint: string): boolean {
+  return _decimalsCache.has(mint);
+}
 
 async function getTokenProgram(connection: Connection, mint: PublicKey): Promise<PublicKey> {
   const key = mint.toBase58();
@@ -63,19 +104,19 @@ async function getTokenProgram(connection: Connection, mint: PublicKey): Promise
     : TOKEN_PROGRAM_ID;
 
   _programCache.set(key, program);
+  saveTokenCache();
   logger.debug(`Token program for ${key.slice(0, 8)}: ${program.equals(TOKEN_2022_PROGRAM_ID) ? "Token-2022" : "Standard"}`);
   return program;
 }
 
 // ─── Decimals ─────────────────────────────────────────────────────────────────
 
-const _decimalsCache = new Map<string, number>();
-
 export async function getTokenDecimals(connection: Connection, mint: string): Promise<number> {
   if (_decimalsCache.has(mint)) return _decimalsCache.get(mint)!;
   const program = await getTokenProgram(connection, new PublicKey(mint));
   const mintInfo = await getMint(connection, new PublicKey(mint), "confirmed", program);
   _decimalsCache.set(mint, mintInfo.decimals);
+  saveTokenCache();
   logger.debug(`Decimals for ${mint.slice(0, 8)}: ${mintInfo.decimals}`);
   return mintInfo.decimals;
 }
