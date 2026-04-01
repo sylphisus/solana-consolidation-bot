@@ -57,6 +57,7 @@ function makeTokenState(mint: string, symbol: string): TokenState {
     buyMcap: null,
     sold: false, balance: 0n,
     allTimeLow: null, lastAtlAlertMcap: null, lastUpsideAlertMcap: null,
+    lastBalanceCheck: null,
   };
 }
 

@@ -86,7 +86,7 @@ export interface TradeRecord {
   triggerMarketCap: number;
   triggerLevel: number;      // the Y-line value that hit threshold
   touchCount: number;
-  amountRaw: bigint;
+  amountRaw: string;
   amountUi: number;
   txSignature: string | null;
   status: TradeStatus;
