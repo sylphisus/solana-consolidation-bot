@@ -2,7 +2,7 @@ import "dotenv/config";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { BotConfig, BotState, TokenState, TradeRecord } from "./types";
 import { loadKeypair, getSolBalance, getTokenBalance, getAllTokenBalances, getTokenDecimals, toUiAmount } from "./wallet";
-import { startPriceFeed, stopPriceFeed, stopAllFeeds, fmtMarketCap } from "./price";
+import { startPriceFeed, stopPriceFeed, stopAllFeeds } from "./price";
 import { processMarketCap, fmtMc } from "./consolidation";
 import { executeSell } from "./executor";
 import { logger } from "./logger";
@@ -55,7 +55,7 @@ function makeTokenState(mint: string, symbol: string): TokenState {
     currentMarketCap: null, currentPrice: null,
     lastUpdated: null, yLevels: [], anchorMcap: null,
     buyMcap: null,
-    sold: false, balance: 0n, lastBalanceCheck: null,
+    sold: false, balance: 0n,
     allTimeLow: null, lastAtlAlertMcap: null, lastUpsideAlertMcap: null,
   };
 }
@@ -182,9 +182,8 @@ async function watchToken(
         const minMcap = tc2.buyMcap * (1 + tc2.minProfitPct / 100);
         if (event.currentMarketCap < minMcap) {
           await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap,
-            `below min profit threshold (need \`${fmtMarketCap(minMcap)}\`, currently \`${fmtMarketCap(event.currentMarketCap)}\`)`);
+            `below min profit threshold (need \`${fmtMc(minMcap)}\`, currently \`${fmtMc(event.currentMarketCap)}\`)`);
           logger.info(`[${ts2.symbol}] Sell blocked — below min profit threshold`);
-          ts2.sold = false;
           ts2.yLevels = []; ts2.anchorMcap = null;
           return;
         }
@@ -295,7 +294,7 @@ async function main(): Promise<void> {
       if (!ts || !tc) return `Token not found.`;
       ts.allTimeLow = ts.currentMarketCap;
       ts.lastAtlAlertMcap = ts.currentMarketCap;
-      return `✅ ATL reset for *${tc.symbol}*. New baseline: \`${fmtMarketCap(ts.currentMarketCap ?? 0)}\``;
+      return `✅ ATL reset for *${tc.symbol}*. New baseline: \`${fmtMc(ts.currentMarketCap ?? 0)}\``;
     },
 
     testSell: (mint) => {
@@ -340,16 +339,15 @@ async function main(): Promise<void> {
     config.tokens.map((t) => t.symbol)
   );
 
-  // Start price feeds for all tokens
-  await Promise.all(
-    mints.map((mint) =>
-      watchToken(mint, config, state, connection, keypair, sellInProgress)
-        .catch((err) => {
-          const sym = config.tokens.find((t) => t.mint === mint)?.symbol ?? mint.slice(0, 8);
-          logger.error(`Failed to watch ${sym}`, { error: String(err) });
-        })
-    )
-  );
+  // Start price feeds for all tokens — staggered to avoid RPC burst on startup
+  for (const mint of mints) {
+    await watchToken(mint, config, state, connection, keypair, sellInProgress)
+      .catch((err) => {
+        const sym = config.tokens.find((t) => t.mint === mint)?.symbol ?? mint.slice(0, 8);
+        logger.error(`Failed to watch ${sym}`, { error: String(err) });
+      });
+    await new Promise((r) => setTimeout(r, 150));
+  }
 
   logger.info(`Bot live — polling every ${POLL_INTERVAL_MS}ms via DexScreener`, {
     wallet: keypair.publicKey.toBase58(),
