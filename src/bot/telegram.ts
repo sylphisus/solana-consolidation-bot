@@ -83,6 +83,19 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("settings",    (ctx) => startSettings(ctx, false));
   bot.command("fetch",       cmdFetch);
 
+  // Sticker / GIF → send back as downloadable file
+  bot.on("sticker", async (ctx) => {
+    const s = (ctx.message as any).sticker;
+    const fileId = s.file_id;
+    const type = s.is_animated ? "animated sticker (.tgs)" : s.is_video ? "video sticker (.webm)" : "sticker (.webp)";
+    await ctx.replyWithDocument(fileId, { caption: `📎 Here's your ${type}` });
+  });
+
+  bot.on("animation", async (ctx) => {
+    const fileId = (ctx.message as any).animation.file_id;
+    await ctx.replyWithDocument(fileId, { caption: "📎 Here's your GIF (.mp4)" });
+  });
+
   bot.on("callback_query", async (ctx) => {
     await ctx.answerCbQuery();
     const data = (ctx.callbackQuery as any).data as string;
