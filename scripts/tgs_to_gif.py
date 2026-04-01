@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import lottie
-from lottie.exporters import exporters
+from lottie.exporters.gif import export_gif
 
 if len(sys.argv) != 3:
     print("Usage: tgs_to_gif.py <input.tgs> <output.gif>", file=sys.stderr)
@@ -10,5 +10,4 @@ if len(sys.argv) != 3:
 with open(sys.argv[1], "rb") as f:
     animation = lottie.parsers.tgs.parse_tgs(f)
 
-exp = exporters.get("gif")
-exp.export(animation, sys.argv[2])
+export_gif(animation, sys.argv[2])
