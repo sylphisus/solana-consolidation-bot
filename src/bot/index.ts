@@ -120,18 +120,20 @@ async function watchToken(
     const prevCounts = new Map(ts2.yLevels.map((l) => [l.value, l.touchCount]));
     const event = processMarketCap(ts2, tc2, update.marketCap);
 
+    let invalidationFired = false;
     for (const level of ts2.yLevels) {
       const prev = prevCounts.get(level.value) ?? 0;
       if (level.touchCount > prev) {
         await notifyTouchDetected(ts2.symbol, level.touchCount, tc2.touchThreshold,
           update.marketCap, level.value);
       } else if (prev > 0 && level.touchCount === 0) {
+        invalidationFired = true;
         await notifyInvalidation(ts2.symbol, level.value, update.marketCap, tc2.invalidationPct);
       }
     }
 
     // ── Price tracking: ATL and upside alerts ─────────────────────────────────
-    if (tc2.priceTracking) {
+    if (tc2.priceTracking && !invalidationFired) {
       const mcap = update.marketCap;
 
       // Initialise on first reading
