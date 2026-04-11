@@ -33,7 +33,7 @@ function loadConfig(): BotConfig {
   for (const t of cfg.tokens) {
     t.sellPct             ??= 100;
     t.minProfitPct        ??= null;
-    t.priceTracking       ??= false;
+    t.priceTracking       ??= true;
     t.atlAlertSpacingUsd  ??= 10_000;
     t.upsideAlertPct      ??= 30;
   }
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
         buyMcap: buyMcap ?? null,
         sellPct: 100,
         minProfitPct: 25,
-        priceTracking: false,
+        priceTracking: true,
         atlAlertSpacingUsd: 10_000,
         upsideAlertPct: 30,
       });
