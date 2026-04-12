@@ -13,6 +13,9 @@ import fs from "fs";
 
 const execFileAsync = promisify(execFile);
 const TGS_SCRIPT = path.join(process.cwd(), "scripts", "tgs_to_gif.py");
+const INSTAGRAM_COOKIES = process.env.INSTAGRAM_COOKIES || path.join(process.cwd(), "config", "instagram_cookies.txt");
+const INSTAGRAM_URL_RE = /https?:\/\/(?:www\.)?instagram\.com\/[^\s]+/i;
+const TG_UPLOAD_LIMIT = 50 * 1024 * 1024;
 
 // ─── Callbacks ────────────────────────────────────────────────────────────────
 
@@ -136,6 +139,17 @@ function registerHandlers(bot: Telegraf): void {
       return;
     }
 
+    // Instagram URL detection — download highlight/reel/post and send back
+    // Supports optional playlist item spec after URL: "<url> 38" or "<url> 38-40" or "<url> 1,3,38"
+    const igMatch = text.match(INSTAGRAM_URL_RE);
+    if (igMatch) {
+      wizardState.delete(ctx.chat.id);
+      const afterUrl = text.slice(igMatch.index! + igMatch[0].length).trim();
+      const playlistItems = /^[\d,\-]+$/.test(afterUrl) ? afterUrl : undefined;
+      await downloadInstagramAndSend(ctx, igMatch[0], playlistItems);
+      return;
+    }
+
     const wizard = wizardState.get(ctx.chat.id);
     if (wizard) { await handleWizardInput(ctx, wizard); return; }
 
@@ -159,7 +173,7 @@ function mainMenuKeyboard() {
     [Markup.button.callback("🪙 Tokens",        "cmd:status")],
     [Markup.button.callback("📋 Trade History", "cmd:trades")],
     [Markup.button.callback("🗑 Remove Token",  "cmd:removetoken")],
-    [Markup.button.callback("⚙️ Settings",      "cmd:settings")],
+    [Markup.button.callback("⚙️ Token Settings", "cmd:settings")],
     [Markup.button.callback("🧪 Test Sell",      "cmd:testsell")],
     [Markup.button.callback(bondLabel,           "cmd:togglebond")],
   ]);
@@ -244,23 +258,26 @@ async function cmdStatus(ctx: Context): Promise<void> {
   const state  = callbacks.getState();
   const tokens = callbacks.getTokenList();
 
+  const now = Date.now();
   let msg = `*Bot Status*\n`;
-  msg += `⏱ Uptime: \`${fmtUptime(Date.now() - state.startTime)}\`  📈 Trades: \`${state.totalTradesExecuted}\`\n`;
+  msg += `⏱ Uptime: \`${fmtUptime(now - state.startTime)}\`  📈 Trades: \`${state.totalTradesExecuted}\`\n`;
   msg += `◎ SOL: \`${state.solBalance.toFixed(4)}\`\n\n`;
 
   if (tokens.length === 0) {
     msg += "_No tokens being watched._";
   } else {
+    msg += `🪙 *Total tokens:* \`${tokens.length}\`\n\n`;
     for (const t of tokens) {
       const ts = state.tokens.get(t.mint);
       const tc = callbacks.getConfig(t.mint);
       if (!ts || !tc) continue;
 
-      const mc  = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "—";
-      const ui  = toUiAmount(ts.balance, ts.decimals);
-      const ago = ts.lastUpdated ? `${Math.round((Date.now() - ts.lastUpdated) / 1000)}s ago` : "?";
+      const mc    = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "—";
+      const ui    = toUiAmount(ts.balance, ts.decimals);
+      const stale = ts.lastUpdated === null || (now - ts.lastUpdated) > 30_000;
+      const ago   = ts.lastUpdated ? `${Math.round((now - ts.lastUpdated) / 1000)}s ago` : "no feed";
 
-      msg += `*${ts.symbol}*\n`;
+      msg += `${stale ? "⚠️ " : ""}*${ts.symbol}*${stale ? " _(no price feed)_" : ""}\n`;
       msg += `  Mcap: \`${mc}\`  _(${ago})_\n`;
       msg += `  Balance: \`${ui.toLocaleString()}\`\n`;
       msg += `  Buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold}\`\n`;
@@ -396,7 +413,7 @@ function startSettings(ctx: Context, showAll: boolean): void {
   }
   rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
 
-  ctx.reply("⚙️ *Settings* — Which token?", {
+  ctx.reply("⚙️ *Token Settings* — Which token?", {
     parse_mode: "Markdown",
     ...Markup.inlineKeyboard(rows),
   });
@@ -914,6 +931,85 @@ async function downloadAndSendToDiscord(ctx: Context, fileId: string, filename: 
   } catch (err) {
     logger.error("Failed to send file to Discord", { error: String(err) });
     ctx.reply("❌ Failed to send to Discord. Try again.");
+  }
+}
+
+async function downloadInstagramAndSend(ctx: Context, url: string, playlistItems?: string): Promise<void> {
+  if (!fs.existsSync(INSTAGRAM_COOKIES)) {
+    ctx.reply(
+      "❌ Instagram cookies file not found.\nExpected at `" + INSTAGRAM_COOKIES + "` or set `INSTAGRAM_COOKIES` env var.",
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+
+  const tmpId  = crypto.randomBytes(8).toString("hex");
+  const outDir = path.join(os.tmpdir(), `ig_${tmpId}`);
+  const outTmpl = path.join(outDir, `media.%(autonumber)s.%(ext)s`);
+
+  let statusMsgId: number | null = null;
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    const itemLabel = playlistItems ? ` (item ${playlistItems})` : "";
+    const status = await ctx.reply(`⏬ Downloading from Instagram${itemLabel}…`);
+    statusMsgId = status.message_id;
+
+    const args = [
+      "--cookies", INSTAGRAM_COOKIES,
+      "--no-warnings",
+      "--quiet",
+      "-o", outTmpl,
+    ];
+    if (playlistItems) args.push("--playlist-items", playlistItems);
+    args.push(url);
+
+    await execFileAsync("yt-dlp", args, { timeout: 120_000, maxBuffer: 10 * 1024 * 1024 });
+
+    const files = fs.readdirSync(outDir)
+      .filter((f) => !f.endsWith(".part") && !f.endsWith(".ytdl") && !f.endsWith(".json"))
+      .sort();
+    if (files.length === 0) throw new Error("yt-dlp produced no files");
+
+    for (const f of files) {
+      const fp   = path.join(outDir, f);
+      const ext  = path.extname(f).toLowerCase();
+      const size = fs.statSync(fp).size;
+
+      if (size > TG_UPLOAD_LIMIT) {
+        await ctx.reply(`⚠️ \`${f}\` is ${(size / 1024 / 1024).toFixed(1)} MB — exceeds Telegram's 50 MB upload limit, skipping.`, { parse_mode: "Markdown" });
+        continue;
+      }
+
+      if (ext === ".mp4" || ext === ".mov" || ext === ".webm" || ext === ".mkv") {
+        await ctx.replyWithVideo({ source: fp });
+      } else if (ext === ".jpg" || ext === ".jpeg" || ext === ".png" || ext === ".webp") {
+        await ctx.replyWithPhoto({ source: fp });
+      } else {
+        await ctx.replyWithDocument({ source: fp });
+      }
+    }
+
+    if (statusMsgId != null) {
+      try { await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsgId); } catch {}
+      statusMsgId = null;
+    }
+  } catch (err) {
+    const msg = String((err as any)?.stderr || err);
+    logger.error("Instagram download failed", { url, error: msg });
+    let reply = "❌ Instagram download failed.";
+    if (/login|cookies?|rate.?limit|401|403|empty media response/i.test(msg)) {
+      reply = "❌ Instagram auth failed — cookies may be expired. Re-export and try again.";
+    } else if (/ENOENT.*yt-dlp|yt-dlp.*not found/i.test(msg)) {
+      reply = "❌ `yt-dlp` is not installed on this host.";
+    } else {
+      reply += `\n\`${msg.slice(0, 300).replace(/`/g, "'")}\``;
+    }
+    try {
+      if (statusMsgId != null) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsgId);
+    } catch {}
+    ctx.reply(reply, { parse_mode: "Markdown" });
+  } finally {
+    try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
   }
 }
 

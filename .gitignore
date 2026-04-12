@@ -7,3 +7,4 @@ bot-wallet.json
 logs/
 .DS_Store
 config/tokens.json
+config/instagram_cookies.txt
