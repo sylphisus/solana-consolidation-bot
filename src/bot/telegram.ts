@@ -817,6 +817,14 @@ export async function notifyNewBond(
   }
 }
 
+export async function notifyStaleToken(symbol: string): Promise<void> {
+  await safeSend(`⚠️ *${symbol}* — no price feed from DexScreener. Token may have lost liquidity or been delisted.`);
+}
+
+export async function notifyTokenRecovered(symbol: string): Promise<void> {
+  await safeSend(`✅ *${symbol}* — price feed restored.`);
+}
+
 async function safeSend(message: string): Promise<void> {
   if (!tg || !authorizedChatId) return;
   try {

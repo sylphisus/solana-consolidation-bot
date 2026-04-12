@@ -18,6 +18,8 @@ import {
   notifyUpsideAlert,
   notifySellBlocked,
   notifyNewBond,
+  notifyStaleToken,
+  notifyTokenRecovered,
 } from "./telegram";
 import { startBondMonitor, stopBondMonitor } from "./pumpfun";
 import fs from "fs";
@@ -98,7 +100,8 @@ async function watchToken(
   state: BotState,
   connection: Connection,
   keypair: ReturnType<typeof loadKeypair>,
-  sellInProgress: Set<string>
+  sellInProgress: Set<string>,
+  staleTokens: Set<string>
 ): Promise<void> {
   const tc = config.tokens.find((t) => t.mint === mint);
   if (!tc) return;
@@ -116,6 +119,12 @@ async function watchToken(
     if (!ts2 || !tc2 || ts2.sold) return;
 
     ts2.currentPrice    = update.price;
+
+    // If this token was previously marked stale, it has recovered
+    if (staleTokens.has(update.mint)) {
+      staleTokens.delete(update.mint);
+      notifyTokenRecovered(ts2.symbol).catch(() => {});
+    }
 
     const prevCounts = new Map(ts2.yLevels.map((l) => [l.value, l.touchCount]));
     const event = processMarketCap(ts2, tc2, update.marketCap);
@@ -226,6 +235,7 @@ async function main(): Promise<void> {
   );
   const mints: string[] = config.tokens.map((t) => t.mint);
   const sellInProgress  = new Set<string>();
+  const staleTokens     = new Set<string>(); // mints currently without a price feed
   let bondMonitorEnabled = false;
 
   // ── Telegram ────────────────────────────────────────────────────────────────
@@ -257,7 +267,7 @@ async function main(): Promise<void> {
       ts.buyMcap = buyMcap ?? null;
       state.tokens.set(mint, ts);
       if (!mints.includes(mint)) mints.push(mint);
-      watchToken(mint, config, state, connection, keypair, sellInProgress)
+      watchToken(mint, config, state, connection, keypair, sellInProgress, staleTokens)
         .catch((err) => logger.error(`Failed to watch ${symbol}`, { error: String(err) }));
       return `✅ *${symbol}* added. Polling DexScreener every ${POLL_INTERVAL_MS / 1000}s.\n\nUse ⚙️ Settings to adjust detection parameters.`;
     },
@@ -350,7 +360,7 @@ async function main(): Promise<void> {
     mints.map((mint) => {
       const delay = isTokenCached(mint) ? 0 : (coldIndex++ * 200);
       return new Promise<void>((r) => setTimeout(r, delay))
-        .then(() => watchToken(mint, config, state, connection, keypair, sellInProgress))
+        .then(() => watchToken(mint, config, state, connection, keypair, sellInProgress, staleTokens))
         .catch((err) => {
           const sym = config.tokens.find((t) => t.mint === mint)?.symbol ?? mint.slice(0, 8);
           logger.error(`Failed to watch ${sym}`, { error: String(err) });
@@ -362,6 +372,23 @@ async function main(): Promise<void> {
     wallet: keypair.publicKey.toBase58(),
     tokens: config.tokens.map((t) => t.symbol),
   });
+
+  // ── Stale feed monitor — alert once if a token stops getting DexScreener data ──
+  const STALE_MS = 30_000;
+  const STALE_GRACE_MS = 60_000; // don't alert in first 60s while feeds are warming up
+  const botStartTime = Date.now();
+  setInterval(() => {
+    if (Date.now() - botStartTime < STALE_GRACE_MS) return;
+    for (const tc of config.tokens) {
+      const ts = state.tokens.get(tc.mint);
+      if (!ts || ts.sold) continue;
+      const isStale = ts.lastUpdated === null || (Date.now() - ts.lastUpdated) > STALE_MS;
+      if (isStale && !staleTokens.has(tc.mint)) {
+        staleTokens.add(tc.mint);
+        notifyStaleToken(ts.symbol).catch(() => {});
+      }
+    }
+  }, STALE_MS);
 
   // ── Poll SOL + token balances on startup and every 5 minutes ────────────
   async function refreshBalances() {
