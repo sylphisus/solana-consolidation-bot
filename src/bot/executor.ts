@@ -130,7 +130,7 @@ export async function executeSell(
 
   const record: TradeRecord = {
     id, mint, symbol, triggerMarketCap, triggerLevel, touchCount,
-    amountRaw: amountRaw.toString() as any,  // store as string — bigint not JSON-serialisable
+    amountRaw: amountRaw.toString(),
     amountUi,
     txSignature: null,
     status: "pending",

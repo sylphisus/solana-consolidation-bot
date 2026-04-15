@@ -1,6 +1,7 @@
 import axios from "axios";
 import { MarketCapUpdate } from "./types";
 import { logger } from "./logger";
+import { fmtMc } from "./consolidation";
 
 export const SOL_MINT  = "So11111111111111111111111111111111111111112";
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -47,17 +48,32 @@ const watchedTokens = new Map<string, TokenEntry>();
 let batchTimer: ReturnType<typeof setTimeout> | null = null;
 let batchIntervalMs = 1_000;
 
+const DEXSCREENER_BATCH_SIZE = 30;
+
 async function runBatch(): Promise<void> {
   const mints = [...watchedTokens.keys()].filter(m => !watchedTokens.get(m)!.stopped);
   if (mints.length === 0) { scheduleBatch(); return; }
 
   try {
-    const res = await axios.get(`${DEXSCREENER_BASE}/${mints.join(",")}`, { timeout: 10_000 });
-    const pairs: any[] = Array.isArray(res.data) ? res.data : (res.data?.pairs ?? []);
+    // Chunk into groups of 30 (DexScreener batch limit) and fetch in parallel
+    const chunks: string[][] = [];
+    for (let i = 0; i < mints.length; i += DEXSCREENER_BATCH_SIZE) {
+      chunks.push(mints.slice(i, i + DEXSCREENER_BATCH_SIZE));
+    }
+
+    const responses = await Promise.all(
+      chunks.map(chunk =>
+        axios.get(`${DEXSCREENER_BASE}/${chunk.join(",")}`, { timeout: 10_000 })
+      )
+    );
+
+    const allPairs: any[] = responses.flatMap(res =>
+      Array.isArray(res.data) ? res.data : (res.data?.pairs ?? [])
+    );
 
     // Build a map of mint → best pair
     const bestPair = new Map<string, any>();
-    for (const pair of pairs) {
+    for (const pair of allPairs) {
       if (pair.chainId !== "solana") continue;
       const addr = pair.baseToken?.address;
       if (!addr) continue;
@@ -79,7 +95,7 @@ async function runBatch(): Promise<void> {
       if (!marketCap || isNaN(price)) continue;
 
       entry.callback({ mint, marketCap, price, timestamp: now });
-      logger.debug(`[${entry.symbol}] mcap: ${fmtMarketCap(marketCap)} price: $${price}`);
+      logger.debug(`[${entry.symbol}] mcap: ${fmtMc(marketCap)} price: $${price}`);
     }
   } catch (err) {
     logger.warn("Batch DexScreener fetch failed", { error: String(err) });
@@ -124,11 +140,3 @@ export function stopAllFeeds(): void {
   if (batchTimer) { clearTimeout(batchTimer); batchTimer = null; }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-export function fmtMarketCap(mc: number): string {
-  if (mc >= 1_000_000_000) return `$${(mc / 1_000_000_000).toFixed(2)}B`;
-  if (mc >= 1_000_000)     return `$${(mc / 1_000_000).toFixed(2)}M`;
-  if (mc >= 1_000)         return `$${(mc / 1_000).toFixed(1)}K`;
-  return `$${mc.toFixed(0)}`;
-}
