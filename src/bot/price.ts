@@ -8,7 +8,7 @@ export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // ─── DexScreener API ──────────────────────────────────────────────────────────
 // Batch endpoint: up to 30 comma-separated mints in one request.
-// This keeps us well under the 60 req/min rate limit regardless of token count.
+// Rate limit: 300 req/min for the /tokens/v1 endpoint.
 
 const DEXSCREENER_BASE = "https://api.dexscreener.com/tokens/v1/solana";
 

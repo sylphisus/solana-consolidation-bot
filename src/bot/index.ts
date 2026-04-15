@@ -90,7 +90,7 @@ function recordTrade(trade: TradeRecord, state: BotState): void {
 
 // ─── Poll interval from env ───────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "1000", 10);
+const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "2000", 10);
 
 // ─── Watch a single token ─────────────────────────────────────────────────────
 
