@@ -295,9 +295,12 @@ async function main(): Promise<void> {
         if (settings.buyMcap !== undefined) {
           ts.buyMcap = settings.buyMcap ?? null;
           ts.yLevels = []; ts.anchorMcap = null;
+        } else if (settings.levelSpacingUsd !== undefined) {
+          ts.yLevels = []; ts.anchorMcap = null;
         }
       }
-      return `✅ Settings updated for *${tc.symbol}*${settings.buyMcap !== undefined ? ". Grid rebuilds on next price tick." : "."}`;
+      const rebuilds = settings.buyMcap !== undefined || settings.levelSpacingUsd !== undefined;
+      return `✅ Settings updated for *${tc.symbol}*${rebuilds ? ". Grid rebuilds on next price tick." : "."}`;
     },
 
     getConfig: (mint) => config.tokens.find((t) => t.mint === mint) ?? null,

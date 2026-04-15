@@ -33,7 +33,7 @@ npm run dev
 - Time-gate: minimum seconds between touches on the same line
 - Invalidation: if mcap rises `invalidationPct`% above a line, reset its touch count
 - Touch count overflows: every N touches (where N = `touchThreshold`) fires a sell
-- Grid resets only when `buyMcap` is changed — other settings changes preserve touch counts
+- Grid resets when `buyMcap` or `levelSpacingUsd` is changed — other settings changes preserve touch counts
 
 ### Sell Execution
 - Jupiter V6 lite API (`lite-api.jup.ag`)
