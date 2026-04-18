@@ -269,7 +269,12 @@ async function cmdStatus(ctx: Context): Promise<void> {
     msg += "_No tokens being watched._";
   } else {
     msg += `🪙 *Total tokens:* \`${tokens.length}\`\n\n`;
-    for (const t of tokens) {
+    const sorted = [...tokens].sort((a, b) => {
+      const mcA = state.tokens.get(a.mint)?.currentMarketCap ?? -1;
+      const mcB = state.tokens.get(b.mint)?.currentMarketCap ?? -1;
+      return mcB - mcA;
+    });
+    for (const t of sorted) {
       const ts = state.tokens.get(t.mint);
       const tc = callbacks.getConfig(t.mint);
       if (!ts || !tc) continue;
