@@ -1,6 +1,7 @@
 // ─── Config Types ─────────────────────────────────────────────────────────────
 
 export interface TokenConfig {
+  id: number;           // persistent auto-increment identifier
   mint: string;
   symbol: string;
   // Consolidation detection settings
@@ -26,6 +27,7 @@ export interface GlobalConfig {
 export interface BotConfig {
   tokens: TokenConfig[];
   global: GlobalConfig;
+  nextTokenId: number;  // auto-increment counter for token IDs
 }
 
 // ─── Runtime State Types ───────────────────────────────────────────────────────

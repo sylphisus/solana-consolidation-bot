@@ -22,7 +22,7 @@ const TG_UPLOAD_LIMIT = 50 * 1024 * 1024;
 export interface TelegramCallbacks {
   getState: () => BotState;
   getTradeHistory: () => TradeRecord[];
-  getTokenList: () => { mint: string; symbol: string }[];
+  getTokenList: () => { id: number; mint: string; symbol: string }[];
   addToken: (mint: string, symbol: string, buyMcap?: number | null) => string | Promise<string>;
   removeToken: (mint: string) => string;
   updateSettings: (mint: string, settings: Partial<TokenConfig>) => string;
@@ -279,7 +279,7 @@ async function cmdStatus(ctx: Context): Promise<void> {
       const stale = ts.lastUpdated === null || (now - ts.lastUpdated) > 30_000;
       const ago   = ts.lastUpdated ? `${Math.round((now - ts.lastUpdated) / 1000)}s ago` : "no feed";
 
-      msg += `${stale ? "⚠️ " : ""}*${ts.symbol}*${stale ? " _(no price feed)_" : ""}\n`;
+      msg += `${stale ? "⚠️ " : ""}*${ts.symbol}* \`#${t.id}\`${stale ? " _(no price feed)_" : ""}\n`;
       msg += `  Mcap: \`${mc}\`  _(${ago})_\n`;
       msg += `  Balance: \`${ui.toLocaleString()}\`\n`;
       msg += `  Buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold}\`\n`;
@@ -368,65 +368,72 @@ async function handleAutoAddCA(ctx: Context, mint: string): Promise<void> {
   }
 }
 
-// ─── Command: /remove <ticker[,ticker...]> ────────────────────────────────────
+// ─── Command: /remove <id|ticker[ ,id|ticker ...]> ───────────────────────────
+// Accepts: numeric IDs, ticker symbols, or a mix — separated by spaces or commas.
+// Examples:  /r 1 2 3   /r SOL,BONK   /r 1 BONK 3
 
 function cmdRemoveByTicker(ctx: Context): void {
   if (!callbacks) return;
   const text = ((ctx.message as any)?.text ?? "").trim();
-  // Everything after the command word, split on commas, trimmed, uppercased
+  // Everything after the command word; split on any combination of commas/spaces
   const argStr = text.split(/\s+/).slice(1).join(" ");
-  const tickers = argStr
-    .split(",")
-    .map((t: string) => t.trim().toUpperCase())
-    .filter(Boolean);
+  const tokens = argStr.split(/[\s,]+/).map((s: string) => s.trim()).filter(Boolean);
 
-  if (tickers.length === 0) { startRemoveToken(ctx); return; }
+  if (tokens.length === 0) { startRemoveToken(ctx); return; }
 
   const all = callbacks.getTokenList();
 
-  // Process each ticker — collect single-match removals and ambiguous ones
   const removed: string[] = [];
   const notFound: string[] = [];
 
-  for (const ticker of tickers) {
-    const matches = all.map((t, i) => ({ ...t, idx: i })).filter(t => t.symbol.toUpperCase() === ticker);
-
-    if (matches.length === 0) {
-      notFound.push(ticker);
-    } else if (matches.length === 1) {
-      removed.push(callbacks.removeToken(matches[0].mint));
-    } else {
-      // Flush any accumulated results first so the disambiguation appears in context
-      if (removed.length || notFound.length) {
-        const lines = [
-          ...removed,
-          ...notFound.map(tk => `❓ No token found for *${tk}*`),
-        ];
-        ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
-        removed.length = 0;
-        notFound.length = 0;
-      }
-      // Show disambiguation picker for this ticker
-      wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
-      const rows = matches.map(t => [
-        Markup.button.callback(`${t.symbol}  (${t.mint.slice(0, 4)}…${t.mint.slice(-4)})`, `wiz:rm:${t.idx}`),
-      ]);
-      rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
-      ctx.reply(
-        `⚠️ Multiple tokens share the ticker *${ticker}*. Which one do you want to remove?`,
-        { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
-      );
-    }
-  }
-
-  // Flush any remaining results
-  if (removed.length || notFound.length) {
+  const flushAccumulated = (final: boolean) => {
+    if (!removed.length && !notFound.length) return;
     const lines = [
       ...removed,
       ...notFound.map(tk => `❓ No token found for *${tk}*`),
     ];
-    ctx.reply(lines.join("\n"), { parse_mode: "Markdown", ...backKeyboard() });
+    ctx.reply(lines.join("\n"), { parse_mode: "Markdown", ...(final ? backKeyboard() : {}) });
+    removed.length = 0;
+    notFound.length = 0;
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const isId = /^\d+$/.test(token);
+
+    if (isId) {
+      const id = parseInt(token, 10);
+      const match = all.find(t => t.id === id);
+      if (!match) {
+        notFound.push(`#${id}`);
+      } else {
+        removed.push(callbacks.removeToken(match.mint));
+      }
+    } else {
+      const ticker = token.toUpperCase();
+      const matches = all.map((t, idx) => ({ ...t, idx })).filter(t => t.symbol.toUpperCase() === ticker);
+
+      if (matches.length === 0) {
+        notFound.push(ticker);
+      } else if (matches.length === 1) {
+        removed.push(callbacks.removeToken(matches[0].mint));
+      } else {
+        // Flush before showing a disambiguation picker
+        flushAccumulated(false);
+        wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
+        const rows = matches.map(t => [
+          Markup.button.callback(`#${t.id} ${t.symbol}  (${t.mint.slice(0, 4)}…${t.mint.slice(-4)})`, `wiz:rm:${t.idx}`),
+        ]);
+        rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
+        ctx.reply(
+          `⚠️ Multiple tokens share the ticker *${ticker}*. Which one?`,
+          { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
+        );
+      }
+    }
   }
+
+  flushAccumulated(true);
 }
 
 // ─── Wizard: Remove Token ─────────────────────────────────────────────────────
@@ -441,7 +448,7 @@ function startRemoveToken(ctx: Context, showAll: boolean = false): void {
   const hasMore = tokens.length > PAGE;
   const visible = (!showAll && hasMore) ? tokens.slice(0, PAGE) : tokens;
 
-  const rows = visible.map((t, i) => [Markup.button.callback(t.symbol, `wiz:rm:${i}`)]);
+  const rows = visible.map((t, i) => [Markup.button.callback(`#${t.id} ${t.symbol}`, `wiz:rm:${i}`)]);
   if (hasMore && !showAll) {
     rows.push([Markup.button.callback("▼ Show all tokens", "cmd:removetoken_all")]);
   }

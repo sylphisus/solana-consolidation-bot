@@ -32,13 +32,21 @@ function loadConfig(): BotConfig {
   if (!fs.existsSync(p)) throw new Error(`Config not found at ${p}`);
   const cfg = JSON.parse(fs.readFileSync(p, "utf-8")) as BotConfig;
   // Back-fill any fields added after a token was originally saved
+  cfg.nextTokenId ??= 1;
   for (const t of cfg.tokens) {
     t.sellPct             ??= 100;
     t.minProfitPct        ??= null;
     t.priceTracking       ??= true;
     t.atlAlertSpacingUsd  ??= 10_000;
     t.upsideAlertPct      ??= 30;
+    // Assign IDs to tokens that pre-date this feature
+    if ((t as any).id == null) {
+      t.id = cfg.nextTokenId++;
+    }
   }
+  // Ensure nextTokenId is always above the highest existing ID
+  const maxId = cfg.tokens.reduce((m, t) => Math.max(m, t.id), 0);
+  if (cfg.nextTokenId <= maxId) cfg.nextTokenId = maxId + 1;
   return cfg;
 }
 
@@ -242,12 +250,13 @@ async function main(): Promise<void> {
   initTelegram({
     getState:      () => state,
     getTradeHistory: () => tradeHistory,
-    getTokenList:  () => config.tokens.map((t) => ({ mint: t.mint, symbol: t.symbol })),
+    getTokenList:  () => config.tokens.map((t) => ({ id: t.id, mint: t.mint, symbol: t.symbol })),
 
     addToken: async (mint, symbol, buyMcap?: number | null) => {
       if (config.tokens.find((t) => t.mint === mint))
         return `⚠️ ${symbol} is already in your watch list.`;
       config.tokens.push({
+        id: config.nextTokenId++,
         mint, symbol,
         levelSpacingUsd: 25_000,
         touchThreshold: 3,
