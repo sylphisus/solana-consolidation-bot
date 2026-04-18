@@ -101,6 +101,7 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("trades",      cmdTrades);
   bot.command("removetoken", (ctx) => startRemoveToken(ctx));
   bot.command("remove",      (ctx) => cmdRemoveByTicker(ctx));
+  bot.command("r",           (ctx) => cmdRemoveByTicker(ctx));
   bot.command("settings",    (ctx) => startSettings(ctx, false));
   bot.command("fetch",       cmdFetch);
 
@@ -367,41 +368,65 @@ async function handleAutoAddCA(ctx: Context, mint: string): Promise<void> {
   }
 }
 
-// ─── Command: /remove <ticker> ────────────────────────────────────────────────
+// ─── Command: /remove <ticker[,ticker...]> ────────────────────────────────────
 
 function cmdRemoveByTicker(ctx: Context): void {
   if (!callbacks) return;
   const text = ((ctx.message as any)?.text ?? "").trim();
-  const ticker = text.split(/\s+/).slice(1).join("").toUpperCase();
+  // Everything after the command word, split on commas, trimmed, uppercased
+  const argStr = text.split(/\s+/).slice(1).join(" ");
+  const tickers = argStr
+    .split(",")
+    .map((t: string) => t.trim().toUpperCase())
+    .filter(Boolean);
 
-  if (!ticker) { startRemoveToken(ctx); return; }
+  if (tickers.length === 0) { startRemoveToken(ctx); return; }
 
   const all = callbacks.getTokenList();
-  const matches = all
-    .map((t, i) => ({ ...t, idx: i }))
-    .filter(t => t.symbol.toUpperCase() === ticker);
 
-  if (matches.length === 0) {
-    ctx.reply(`No token with ticker *${ticker}* found.`, { parse_mode: "Markdown", ...backKeyboard() });
-    return;
+  // Process each ticker — collect single-match removals and ambiguous ones
+  const removed: string[] = [];
+  const notFound: string[] = [];
+
+  for (const ticker of tickers) {
+    const matches = all.map((t, i) => ({ ...t, idx: i })).filter(t => t.symbol.toUpperCase() === ticker);
+
+    if (matches.length === 0) {
+      notFound.push(ticker);
+    } else if (matches.length === 1) {
+      removed.push(callbacks.removeToken(matches[0].mint));
+    } else {
+      // Flush any accumulated results first so the disambiguation appears in context
+      if (removed.length || notFound.length) {
+        const lines = [
+          ...removed,
+          ...notFound.map(tk => `❓ No token found for *${tk}*`),
+        ];
+        ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+        removed.length = 0;
+        notFound.length = 0;
+      }
+      // Show disambiguation picker for this ticker
+      wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
+      const rows = matches.map(t => [
+        Markup.button.callback(`${t.symbol}  (${t.mint.slice(0, 4)}…${t.mint.slice(-4)})`, `wiz:rm:${t.idx}`),
+      ]);
+      rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
+      ctx.reply(
+        `⚠️ Multiple tokens share the ticker *${ticker}*. Which one do you want to remove?`,
+        { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
+      );
+    }
   }
 
-  if (matches.length === 1) {
-    const { mint, symbol } = matches[0];
-    ctx.reply(callbacks.removeToken(mint), { parse_mode: "Markdown", ...backKeyboard() });
-    return;
+  // Flush any remaining results
+  if (removed.length || notFound.length) {
+    const lines = [
+      ...removed,
+      ...notFound.map(tk => `❓ No token found for *${tk}*`),
+    ];
+    ctx.reply(lines.join("\n"), { parse_mode: "Markdown", ...backKeyboard() });
   }
-
-  // Multiple tokens share this ticker — ask which one
-  wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
-  const rows = matches.map(t => [
-    Markup.button.callback(`${t.symbol}  (${t.mint.slice(0, 4)}…${t.mint.slice(-4)})`, `wiz:rm:${t.idx}`),
-  ]);
-  rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
-  ctx.reply(
-    `⚠️ Multiple tokens share the ticker *${ticker}*. Which one do you want to remove?`,
-    { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
-  );
 }
 
 // ─── Wizard: Remove Token ─────────────────────────────────────────────────────
