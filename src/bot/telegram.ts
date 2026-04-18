@@ -100,6 +100,7 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("status",      cmdStatus);
   bot.command("trades",      cmdTrades);
   bot.command("removetoken", (ctx) => startRemoveToken(ctx));
+  bot.command("remove",      (ctx) => cmdRemoveByTicker(ctx));
   bot.command("settings",    (ctx) => startSettings(ctx, false));
   bot.command("fetch",       cmdFetch);
 
@@ -364,6 +365,43 @@ async function handleAutoAddCA(ctx: Context, mint: string): Promise<void> {
       backKeyboard()
     );
   }
+}
+
+// ─── Command: /remove <ticker> ────────────────────────────────────────────────
+
+function cmdRemoveByTicker(ctx: Context): void {
+  if (!callbacks) return;
+  const text = ((ctx.message as any)?.text ?? "").trim();
+  const ticker = text.split(/\s+/).slice(1).join("").toUpperCase();
+
+  if (!ticker) { startRemoveToken(ctx); return; }
+
+  const all = callbacks.getTokenList();
+  const matches = all
+    .map((t, i) => ({ ...t, idx: i }))
+    .filter(t => t.symbol.toUpperCase() === ticker);
+
+  if (matches.length === 0) {
+    ctx.reply(`No token with ticker *${ticker}* found.`, { parse_mode: "Markdown", ...backKeyboard() });
+    return;
+  }
+
+  if (matches.length === 1) {
+    const { mint, symbol } = matches[0];
+    ctx.reply(callbacks.removeToken(mint), { parse_mode: "Markdown", ...backKeyboard() });
+    return;
+  }
+
+  // Multiple tokens share this ticker — ask which one
+  wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
+  const rows = matches.map(t => [
+    Markup.button.callback(`${t.symbol}  (${t.mint.slice(0, 4)}…${t.mint.slice(-4)})`, `wiz:rm:${t.idx}`),
+  ]);
+  rows.push([Markup.button.callback("« Cancel", "cmd:home")]);
+  ctx.reply(
+    `⚠️ Multiple tokens share the ticker *${ticker}*. Which one do you want to remove?`,
+    { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
+  );
 }
 
 // ─── Wizard: Remove Token ─────────────────────────────────────────────────────
