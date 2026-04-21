@@ -28,6 +28,8 @@ export interface BotConfig {
   tokens: TokenConfig[];
   global: GlobalConfig;
   nextTokenId: number;  // auto-increment counter for token IDs
+  watchedWallet?: string;          // wallet address to mirror buys/sells from
+  watchedWalletWebhookId?: string; // Helius webhook ID for the watched wallet
 }
 
 // ─── Runtime State Types ───────────────────────────────────────────────────────

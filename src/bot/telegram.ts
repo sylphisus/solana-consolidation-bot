@@ -31,6 +31,8 @@ export interface TelegramCallbacks {
   resetAtl: (mint: string) => string;
   setBondMonitor: (enabled: boolean) => void;
   getBondMonitorEnabled: () => boolean;
+  getWatchedWallet: () => string | null;
+  setWatchedWallet: (wallet: string | null) => Promise<void>;
 }
 
 // ─── Wizard State ─────────────────────────────────────────────────────────────
@@ -40,7 +42,8 @@ type WizardStep =
   | { flow: "remove_token"; step: "await_pick" }
   | { flow: "settings";     step: "await_token" }
   | { flow: "settings";     step: "await_field";   mint: string; symbol: string }
-  | { flow: "settings";     step: "await_value";   mint: string; symbol: string; field: SettingsField };
+  | { flow: "settings";     step: "await_value";   mint: string; symbol: string; field: SettingsField }
+  | { flow: "watch_wallet"; step: "await_address" };
 
 type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "sellPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap";
 
@@ -135,7 +138,14 @@ function registerHandlers(bot: Telegraf): void {
   bot.on("text", async (ctx) => {
     const text = ((ctx.message as any)?.text ?? "").trim();
 
-    // CA detection takes priority over any active wizard state
+    // Watch wallet wizard intercepts base58 input before CA detection
+    const activeWizard = wizardState.get(ctx.chat.id);
+    if (activeWizard?.flow === "watch_wallet" && activeWizard.step === "await_address") {
+      await handleWizardInput(ctx, activeWizard);
+      return;
+    }
+
+    // CA detection takes priority over any other active wizard state
     if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
       wizardState.delete(ctx.chat.id);
       await handleAutoAddCA(ctx, text);
@@ -172,6 +182,10 @@ function mainMenuKeyboard() {
   const bondLabel = callbacks?.getBondMonitorEnabled()
     ? "🔗 Bond Monitor: ON"
     : "🔗 Bond Monitor: OFF";
+  const wallet = callbacks?.getWatchedWallet();
+  const walletLabel = wallet
+    ? `👁 Watch Wallet: ${wallet.slice(0, 4)}…${wallet.slice(-4)}`
+    : "👁 Watch Wallet: OFF";
   return Markup.inlineKeyboard([
     [Markup.button.callback("🪙 Tokens",        "cmd:status")],
     [Markup.button.callback("📋 Trade History", "cmd:trades")],
@@ -179,6 +193,7 @@ function mainMenuKeyboard() {
     [Markup.button.callback("⚙️ Token Settings", "cmd:settings")],
     [Markup.button.callback("🧪 Test Sell",      "cmd:testsell")],
     [Markup.button.callback(bondLabel,           "cmd:togglebond")],
+    [Markup.button.callback(walletLabel,         "cmd:watchwallet")],
   ]);
 }
 
@@ -250,8 +265,45 @@ This will sell your ENTIRE balance immediately.`,
         );
         return;
       }
+      case "watchwallet": return showWatchWalletMenu(ctx);
+      case "watchwallet_set": {
+        wizardState.set(ctx.chat!.id, { flow: "watch_wallet", step: "await_address" });
+        ctx.reply(
+          "👁 *Watch Wallet*\n\nPaste the Solana wallet address you want to mirror.\n\nThe bot will *auto-add* any token it buys and *auto-remove* when it fully sells.\n\n/cancel to go back",
+          { parse_mode: "Markdown" }
+        );
+        return;
+      }
+      case "watchwallet_clear": {
+        if (!callbacks) return;
+        await callbacks.setWatchedWallet(null);
+        ctx.reply("👁 *Wallet watch cleared.* No longer mirroring any wallet.", {
+          parse_mode: "Markdown", ...mainMenuKeyboard(),
+        });
+        return;
+      }
     }
   }
+}
+
+// ─── Watch Wallet Menu ────────────────────────────────────────────────────────
+
+function showWatchWalletMenu(ctx: Context): void {
+  if (!callbacks) return;
+  const wallet = callbacks.getWatchedWallet();
+  const msg = wallet
+    ? `👁 *Watch Wallet*\n\nCurrently watching:\n\`${wallet}\`\n\nThe bot auto-adds tokens this wallet buys and auto-removes when it fully sells.`
+    : `👁 *Watch Wallet*\n\nNo wallet is currently being watched.\n\nSet one to automatically mirror buys and full sells.`;
+  ctx.reply(msg, {
+    parse_mode: "Markdown",
+    ...Markup.inlineKeyboard([
+      wallet
+        ? [Markup.button.callback("🔄 Change Wallet", "cmd:watchwallet_set")]
+        : [Markup.button.callback("➕ Set Wallet",    "cmd:watchwallet_set")],
+      ...(wallet ? [[Markup.button.callback("🗑 Clear Wallet", "cmd:watchwallet_clear")]] : []),
+      [Markup.button.callback("« Back to menu", "cmd:home")],
+    ]),
+  });
 }
 
 // ─── Info Commands ─────────────────────────────────────────────────────────────
@@ -686,6 +738,27 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
     }
   }
 
+  // ── WATCH WALLET ──────────────────────────────────────────────────────────
+  if (wizard.flow === "watch_wallet" && wizard.step === "await_address") {
+    // Validate: must be a valid base58 Solana address (32–44 chars)
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+      ctx.reply("❌ That doesn't look like a valid Solana address. Paste the full base58 address.\n\n/cancel to go back");
+      return;
+    }
+    wizardState.delete(chatId);
+    ctx.reply("⏳ Setting up wallet watcher...");
+    try {
+      await callbacks!.setWatchedWallet(text);
+      ctx.reply(
+        `👁 *Wallet Watch Active*\n\n\`${text}\`\n\nTokens this wallet *buys* will be auto-added to your watchlist.\nTokens it *fully sells* will be auto-removed.\n\n⚠️ Make sure \`WEBHOOK_URL\` is set in your \`.env\` so Helius can reach your server.`,
+        { parse_mode: "Markdown", ...mainMenuKeyboard() }
+      );
+    } catch (err) {
+      ctx.reply(`❌ Failed to set wallet watcher: ${String(err)}`, backKeyboard());
+    }
+    return;
+  }
+
   // ── SETTINGS ──────────────────────────────────────────────────────────────
   if (wizard.flow === "settings" && wizard.step === "await_value") {
     const { mint, symbol, field } = wizard;
@@ -910,6 +983,23 @@ export async function notifyNewBond(
   } catch (err) {
     logger.error("Failed to send bond notification", { error: String(err) });
   }
+}
+
+export async function notifyWalletBuy(mint: string, symbol: string, buyMcap: number): Promise<void> {
+  await safeSend(
+    `👁 *Wallet Buy Detected — ${symbol}*\n\n` +
+    `Mint: \`${mint}\`\n` +
+    `Mcap at buy: \`${fmtMc(buyMcap)}\`\n\n` +
+    `✅ Auto-added to watchlist with default settings.`
+  );
+}
+
+export async function notifyWalletFullSell(mint: string, symbol: string): Promise<void> {
+  await safeSend(
+    `👁 *Wallet Full Sell Detected — ${symbol}*\n\n` +
+    `The watched wallet fully exited this position.\n\n` +
+    `🗑 Auto-removed from watchlist.`
+  );
 }
 
 export async function notifyStaleToken(mint: string, symbol: string): Promise<void> {

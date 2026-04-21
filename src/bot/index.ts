@@ -20,8 +20,11 @@ import {
   notifyNewBond,
   notifyStaleToken,
   notifyTokenRecovered,
+  notifyWalletBuy,
+  notifyWalletFullSell,
 } from "./telegram";
 import { startBondMonitor, stopBondMonitor } from "./pumpfun";
+import { createWalletWatcher } from "./wallet-watcher";
 import fs from "fs";
 import path from "path";
 
@@ -47,6 +50,9 @@ function loadConfig(): BotConfig {
   // Ensure nextTokenId is always above the highest existing ID
   const maxId = cfg.tokens.reduce((m, t) => Math.max(m, t.id), 0);
   if (cfg.nextTokenId <= maxId) cfg.nextTokenId = maxId + 1;
+  // Back-fill wallet watcher fields
+  cfg.watchedWallet        ??= undefined;
+  cfg.watchedWalletWebhookId ??= undefined;
   return cfg;
 }
 
@@ -246,6 +252,64 @@ async function main(): Promise<void> {
   const staleTokens     = new Set<string>(); // mints currently without a price feed
   let bondMonitorEnabled = false;
 
+  // ── Wallet watcher ───────────────────────────────────────────────────────────
+  const walletWatcher = await createWalletWatcher(
+    connection,
+    {
+      isTracked: (mint) => config.tokens.some((t) => t.mint === mint),
+
+      onBuy: async (mint, symbol, buyMcap) => {
+        // Could already be tracked if the bot added it between webhook fire and delivery
+        if (config.tokens.find((t) => t.mint === mint)) return;
+        const id = config.nextTokenId++;
+        config.tokens.push({
+          id, mint, symbol,
+          levelSpacingUsd: 25_000,
+          touchThreshold: 3,
+          hysteresisPct: 10,
+          hysteresisUsd: null,
+          minSecsBetweenTouches: 5,
+          invalidationPct: 30,
+          buyMcap,
+          sellPct: 100,
+          minProfitPct: 25,
+          priceTracking: true,
+          atlAlertSpacingUsd: 10_000,
+          upsideAlertPct: 30,
+        });
+        saveConfig(config);
+        const ts = makeTokenState(mint, symbol);
+        ts.buyMcap = buyMcap;
+        state.tokens.set(mint, ts);
+        if (!mints.includes(mint)) mints.push(mint);
+        watchToken(mint, config, state, connection, keypair, sellInProgress, staleTokens)
+          .catch((err) => logger.error(`Wallet watcher: failed to start feed for ${symbol}`, { error: String(err) }));
+        await notifyWalletBuy(mint, symbol, buyMcap);
+      },
+
+      onFullSell: async (mint) => {
+        const idx = config.tokens.findIndex((t) => t.mint === mint);
+        if (idx === -1) return;
+        const symbol = config.tokens[idx].symbol;
+        config.tokens.splice(idx, 1);
+        saveConfig(config);
+        state.tokens.delete(mint);
+        stopPriceFeed(mint);
+        const mi = mints.indexOf(mint);
+        if (mi !== -1) mints.splice(mi, 1);
+        await notifyWalletFullSell(mint, symbol);
+      },
+    },
+    config.watchedWallet,
+    config.watchedWalletWebhookId,
+  );
+
+  // Persist the (possibly refreshed) webhook ID after startup registration
+  if (config.watchedWallet) {
+    config.watchedWalletWebhookId = walletWatcher.getWebhookId() ?? undefined;
+    saveConfig(config);
+  }
+
   // ── Telegram ────────────────────────────────────────────────────────────────
   initTelegram({
     getState:      () => state,
@@ -358,6 +422,15 @@ async function main(): Promise<void> {
     },
 
     getBondMonitorEnabled: () => bondMonitorEnabled,
+
+    getWatchedWallet: () => config.watchedWallet ?? null,
+
+    setWatchedWallet: async (wallet: string | null) => {
+      const { webhookId } = await walletWatcher.setWallet(wallet);
+      config.watchedWallet = wallet ?? undefined;
+      config.watchedWalletWebhookId = webhookId ?? undefined;
+      saveConfig(config);
+    },
   });
 
   await notifyStartup(
@@ -426,6 +499,8 @@ async function main(): Promise<void> {
 
 process.on("SIGINT",  () => { logger.info("Shutting down..."); saveTokenCache(); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
 process.on("SIGTERM", () => { logger.info("Shutting down..."); saveTokenCache(); stopAllFeeds(); stopBondMonitor(); process.exit(0); });
+// Note: walletWatcher.stop() is not called here because it is inside main() scope.
+// The process.exit() calls above immediately terminate the process, which is fine.
 process.on("uncaughtException", (err) => {
   logger.error("Uncaught exception", { error: err.message }); stopAllFeeds(); process.exit(1);
 });
