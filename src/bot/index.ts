@@ -131,7 +131,7 @@ async function watchToken(
     // If this token was previously marked stale, it has recovered
     if (staleTokens.has(update.mint)) {
       staleTokens.delete(update.mint);
-      notifyTokenRecovered(ts2.symbol).catch(() => {});
+      notifyTokenRecovered(update.mint, ts2.symbol).catch(() => {});
     }
 
     const prevCounts = new Map(ts2.yLevels.map((l) => [l.value, l.touchCount]));
@@ -141,11 +141,11 @@ async function watchToken(
     for (const level of ts2.yLevels) {
       const prev = prevCounts.get(level.value) ?? 0;
       if (level.touchCount > prev) {
-        await notifyTouchDetected(ts2.symbol, level.touchCount, tc2.touchThreshold,
+        await notifyTouchDetected(update.mint, ts2.symbol, level.touchCount, tc2.touchThreshold,
           update.marketCap, level.value);
       } else if (prev > 0 && level.touchCount === 0) {
         invalidationFired = true;
-        await notifyInvalidation(ts2.symbol, level.value, update.marketCap, tc2.invalidationPct);
+        await notifyInvalidation(update.mint, ts2.symbol, level.value, update.marketCap, tc2.invalidationPct);
       }
     }
 
@@ -164,7 +164,7 @@ async function watchToken(
           ts2.allTimeLow = mcap;
           if (ts2.lastAtlAlertMcap !== null && mcap <= ts2.lastAtlAlertMcap - tc2.atlAlertSpacingUsd) {
             ts2.lastAtlAlertMcap = mcap;
-            await notifyAtlAlert(ts2.symbol, mcap, tc2.atlAlertSpacingUsd);
+            await notifyAtlAlert(update.mint, ts2.symbol, mcap, tc2.atlAlertSpacingUsd);
           }
         }
 
@@ -177,7 +177,7 @@ async function watchToken(
             const upsideTarget = ts2.lastUpsideAlertMcap * (1 + tc2.upsideAlertPct / 100);
             if (mcap >= upsideTarget) {
               ts2.lastUpsideAlertMcap = mcap;
-              await notifyUpsideAlert(ts2.symbol, mcap, tc2.upsideAlertPct);
+              await notifyUpsideAlert(update.mint, ts2.symbol, mcap, tc2.upsideAlertPct);
             }
           }
         }
@@ -186,7 +186,7 @@ async function watchToken(
 
     if (event) {
       if (sellInProgress.has(event.mint)) {
-        await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "sell already in progress");
+        await notifySellBlocked(event.mint, event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "sell already in progress");
         return;
       }
       // Fetch balance on-demand right before sell — no need to poll it
@@ -194,14 +194,14 @@ async function watchToken(
         .catch(() => 0n);
 
       if (ts2.balance === 0n) {
-        await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "balance is 0");
+        await notifySellBlocked(event.mint, event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap, "balance is 0");
         logger.warn(`[${ts2.symbol}] Triggered but balance is 0`); return;
       }
 
       if (tc2.minProfitPct != null && tc2.buyMcap != null) {
         const minMcap = tc2.buyMcap * (1 + tc2.minProfitPct / 100);
         if (event.currentMarketCap < minMcap) {
-          await notifySellBlocked(event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap,
+          await notifySellBlocked(event.mint, event.symbol, event.touchCount, event.triggerLevel, event.currentMarketCap,
             `below min profit threshold (need \`${fmtMc(minMcap)}\`, currently \`${fmtMc(event.currentMarketCap)}\`)`);
           logger.info(`[${ts2.symbol}] Sell blocked — below min profit threshold`);
           ts2.yLevels = []; ts2.anchorMcap = null;
@@ -212,7 +212,7 @@ async function watchToken(
       const sellPct    = tc2.sellPct ?? 100;
       const sellAmount = ts2.balance * BigInt(Math.min(sellPct, 100)) / 100n;
 
-      await notifySellTriggered(event.symbol, toUiAmount(sellAmount, ts2.decimals),
+      await notifySellTriggered(event.mint, event.symbol, toUiAmount(sellAmount, ts2.decimals),
         event.triggerLevel, event.touchCount, event.currentMarketCap, sellPct);
 
       sellInProgress.add(event.mint);
@@ -397,7 +397,7 @@ async function main(): Promise<void> {
       const isStale = ts.lastUpdated === null || (Date.now() - ts.lastUpdated) > STALE_MS;
       if (isStale && !staleTokens.has(tc.mint)) {
         staleTokens.add(tc.mint);
-        notifyStaleToken(ts.symbol).catch(() => {});
+        notifyStaleToken(tc.mint, ts.symbol).catch(() => {});
       }
     }
   }, STALE_MS);

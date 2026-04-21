@@ -49,6 +49,7 @@ const wizardState = new Map<number, WizardStep>();
 let tg: Telegraf | null = null;
 let authorizedChatId: number | null = null;
 let callbacks: TelegramCallbacks | null = null;
+let lastNotifiedMint: string | null = null; // mint of the last token the bot sent a message for
 
 // ─── Init ──────────────────────────────────────────────────────────────────────
 
@@ -384,7 +385,19 @@ function cmdRemoveByTicker(ctx: Context): void {
   const argStr = text.split(/\s+/).slice(1).join(" ");
   const tokens = argStr.split(/[\s,]+/).map((s: string) => s.trim()).filter(Boolean);
 
-  if (tokens.length === 0) { startRemoveToken(ctx); return; }
+  if (tokens.length === 0) {
+    // No args — remove the last token the bot sent a notification for
+    if (lastNotifiedMint) {
+      const match = callbacks.getTokenList().find(t => t.mint === lastNotifiedMint);
+      if (match) {
+        ctx.reply(callbacks.removeToken(match.mint), { parse_mode: "Markdown", ...backKeyboard() });
+        lastNotifiedMint = null;
+        return;
+      }
+    }
+    startRemoveToken(ctx);
+    return;
+  }
 
   const all = callbacks.getTokenList();
 
@@ -759,9 +772,10 @@ This will immediately sell 100% of your balance for the selected token via Jupit
 // ─── Outbound Notifications ────────────────────────────────────────────────────
 
 export async function notifyTouchDetected(
-  symbol: string, touchCount: number, touchThreshold: number,
+  mint: string, symbol: string, touchCount: number, touchThreshold: number,
   currentMcap: number, levelMcap: number
 ): Promise<void> {
+  lastNotifiedMint = mint;
   const bar = progBar(touchCount, touchThreshold);
   const lastOne = touchCount === touchThreshold - 1;
   await safeSend(
@@ -774,9 +788,10 @@ export async function notifyTouchDetected(
 }
 
 export async function notifySellTriggered(
-  symbol: string, amount: number, levelMcap: number,
+  mint: string, symbol: string, amount: number, levelMcap: number,
   touchCount: number, currentMcap: number, sellPct: number = 100
 ): Promise<void> {
+  lastNotifiedMint = mint;
   await safeSend(
     `🔴 *SELL TRIGGERED — ${symbol}*\n\n` +
     `Consolidation detected on line \`${fmtMc(levelMcap)}\`\n` +
@@ -787,6 +802,7 @@ export async function notifySellTriggered(
 }
 
 export async function notifyTradeResult(trade: TradeRecord): Promise<void> {
+  lastNotifiedMint = trade.mint;
   if (trade.status === "success") {
     await safeSend(
       `✅ *Sell Confirmed — ${trade.symbol}*\n\n` +
@@ -821,7 +837,8 @@ export async function notifyLowSol(balance: number): Promise<void> {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-export async function notifyAtlAlert(symbol: string, mcap: number, spacingUsd: number): Promise<void> {
+export async function notifyAtlAlert(mint: string, symbol: string, mcap: number, spacingUsd: number): Promise<void> {
+  lastNotifiedMint = mint;
   await safeSend(
     `🔻 *New All-Time Low — ${symbol}*\n\n` +
     `Mcap: \`${fmtMc(mcap)}\`\n` +
@@ -829,7 +846,8 @@ export async function notifyAtlAlert(symbol: string, mcap: number, spacingUsd: n
   );
 }
 
-export async function notifyUpsideAlert(symbol: string, mcap: number, pct: number): Promise<void> {
+export async function notifyUpsideAlert(mint: string, symbol: string, mcap: number, pct: number): Promise<void> {
+  lastNotifiedMint = mint;
   await safeSend(
     `🚀 *+${pct}% Move — ${symbol}*\n\n` +
     `Mcap: \`${fmtMc(mcap)}\`\n` +
@@ -838,8 +856,9 @@ export async function notifyUpsideAlert(symbol: string, mcap: number, pct: numbe
 }
 
 export async function notifySellBlocked(
-  symbol: string, touchCount: number, levelMcap: number, currentMcap: number, reason: string
+  mint: string, symbol: string, touchCount: number, levelMcap: number, currentMcap: number, reason: string
 ): Promise<void> {
+  lastNotifiedMint = mint;
   await safeSend(
     `⚠️ *Sell Attempt Blocked — ${symbol}*\n\n` +
     `Touch #${touchCount} on line \`${fmtMc(levelMcap)}\`\n` +
@@ -849,8 +868,9 @@ export async function notifySellBlocked(
 }
 
 export async function notifyInvalidation(
-  symbol: string, levelMcap: number, currentMcap: number, invalidationPct: number
+  mint: string, symbol: string, levelMcap: number, currentMcap: number, invalidationPct: number
 ): Promise<void> {
+  lastNotifiedMint = mint;
   await safeSend(
     `🚫 *Level Invalidated — ${symbol}*\n\n` +
     `Line \`${fmtMc(levelMcap)}\` reset — mcap pumped >${invalidationPct}% above it\n` +
@@ -892,11 +912,13 @@ export async function notifyNewBond(
   }
 }
 
-export async function notifyStaleToken(symbol: string): Promise<void> {
+export async function notifyStaleToken(mint: string, symbol: string): Promise<void> {
+  lastNotifiedMint = mint;
   await safeSend(`⚠️ *${symbol}* — no price feed from DexScreener. Token may have lost liquidity or been delisted.`);
 }
 
-export async function notifyTokenRecovered(symbol: string): Promise<void> {
+export async function notifyTokenRecovered(mint: string, symbol: string): Promise<void> {
+  lastNotifiedMint = mint;
   await safeSend(`✅ *${symbol}* — price feed restored.`);
 }
 
