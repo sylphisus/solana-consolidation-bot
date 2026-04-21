@@ -276,6 +276,7 @@ async function main(): Promise<void> {
           priceTracking: true,
           atlAlertSpacingUsd: 10_000,
           upsideAlertPct: 30,
+          autoAdded: true,
         });
         saveConfig(config);
         const ts = makeTokenState(mint, symbol);
@@ -290,7 +291,12 @@ async function main(): Promise<void> {
       onFullSell: async (mint) => {
         const idx = config.tokens.findIndex((t) => t.mint === mint);
         if (idx === -1) return;
-        const symbol = config.tokens[idx].symbol;
+        const token = config.tokens[idx];
+        if (!token.autoAdded) {
+          logger.info(`Wallet watcher: ${token.symbol} was manually added — skipping auto-remove`);
+          return;
+        }
+        const symbol = token.symbol;
         config.tokens.splice(idx, 1);
         saveConfig(config);
         state.tokens.delete(mint);

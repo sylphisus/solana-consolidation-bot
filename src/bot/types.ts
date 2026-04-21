@@ -18,6 +18,7 @@ export interface TokenConfig {
   atlAlertSpacingUsd: number;    // fire an ATL alert each time ATL drops by this much (default $10k)
   upsideAlertPct: number;        // fire an upside alert each time mcap rises this % from last alert (default 30)
   notes?: string;
+  autoAdded?: boolean; // true if added automatically by the wallet watcher (not manually)
 }
 
 export interface GlobalConfig {
