@@ -21,8 +21,11 @@ export type BondNotifyFn = (event: BondEvent) => Promise<void>;
 
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
-/** Linear volume threshold: 100k in 60 min → slope = $/min */
-const VOLUME_SLOPE = 100_000 / 60;
+/** Rate threshold: token must be on pace for $100k in 45 min.
+ *  45 min / 5 min = 9 windows → require $100k / 9 ≈ $11,111 per m5 window. */
+const VOLUME_TARGET   = 100_000;
+const WINDOW_MINS     = 45;
+const M5_THRESHOLD    = VOLUME_TARGET / (WINDOW_MINS / 5); // ~$11,111
 
 /** Stop tracking a token after this many minutes without hitting the line */
 const MAX_TRACK_MINS = 90;
@@ -162,18 +165,18 @@ async function pollPendingBonds(): Promise<void> {
       seen.add(mint);
 
       const bond = pendingBonds.get(mint)!;
-      const ageMins = (now - bond.bondedAt) / 60_000;
-      const threshold = VOLUME_SLOPE * ageMins;
+      const ageMins  = (now - bond.bondedAt) / 60_000;
+      const volumeM5: number = pair.volume?.m5 ?? 0;
       const volumeH1: number = pair.volume?.h1 ?? 0;
 
       logger.info("PumpFun volume check", {
-        symbol: pair.baseToken?.symbol ?? mint.slice(0, 8),
-        ageMins: ageMins.toFixed(1),
-        volumeH1,
-        threshold: threshold.toFixed(0),
+        symbol:    pair.baseToken?.symbol ?? mint.slice(0, 8),
+        ageMins:   ageMins.toFixed(1),
+        volumeM5,
+        threshold: M5_THRESHOLD.toFixed(0),
       });
 
-      if (volumeH1 >= threshold) {
+      if (volumeM5 >= M5_THRESHOLD) {
         pendingBonds.delete(mint);
 
         const imageUri = await getOnChainImage(mint);
