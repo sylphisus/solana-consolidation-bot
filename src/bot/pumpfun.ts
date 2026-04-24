@@ -22,18 +22,20 @@ export type BondNotifyFn = (event: BondEvent) => Promise<void>;
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 /** Exponential decay threshold applied to 5-minute volume windows.
- *  First check at MIN_AGE_MINS; each poll compares volume.m5 against the
- *  expected 5-min slice of the decay curve:
+ *  Calibrated so cumulative volume hits $100k at 45 min, extrapolates to ~$103k at 60 min.
+ *  Asymptote C = 100k / (1 - e^(-λ*45)) ≈ $104,600.
+ *  Each poll compares volume.m5 against the expected 5-min slice:
  *    threshold_m5(t) = VOLUME_TARGET * (e^(-λ(t-5)) - e^(-λt))
- *  With a 10-min half-life this gives:
- *    t=5min  → ~$29k   t=10min → ~$21k   t=20min → ~$10k   t=30min → ~$5k  */
-const VOLUME_TARGET  = 100_000;
+ *  With a 10-min half-life:
+ *    t=5min → ~$30.6k   t=10min → ~$21.7k   t=20min → ~$10.8k   t=45min → ~$1.9k  */
 const HALF_LIFE_MINS = 10;
-const LAMBDA         = Math.LN2 / HALF_LIFE_MINS; // ≈ 0.0693
-const MIN_AGE_MINS   = 5;                          // don't evaluate before first full m5 window
+const LAMBDA         = Math.LN2 / HALF_LIFE_MINS;                           // ≈ 0.0693
+const VOLUME_AT_45   = 100_000;
+const VOLUME_TARGET  = VOLUME_AT_45 / (1 - Math.exp(-LAMBDA * 45));         // ≈ $104,600
+const MIN_AGE_MINS   = 5;                                                    // wait for first full m5 window
 
 /** Stop tracking a token after this many minutes without hitting the line */
-const MAX_TRACK_MINS = 90;
+const MAX_TRACK_MINS = 60;
 
 /** How often to poll DexScreener for pending bonds */
 const POLL_INTERVAL_MS = 2_000;
