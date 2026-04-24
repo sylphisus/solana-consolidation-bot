@@ -32,7 +32,6 @@ const HALF_LIFE_MINS = 10;
 const LAMBDA         = Math.LN2 / HALF_LIFE_MINS;                           // ≈ 0.0693
 const VOLUME_AT_45   = 100_000;
 const VOLUME_TARGET  = VOLUME_AT_45 / (1 - Math.exp(-LAMBDA * 45));         // ≈ $104,600
-const MIN_AGE_MINS   = 5;                                                    // wait for first full m5 window
 
 /** Stop tracking a token after this many minutes without hitting the line */
 const MAX_TRACK_MINS = 60;
@@ -47,6 +46,7 @@ interface PendingBond {
   rawEvent: Record<string, any>; // fallback name/symbol if DexScreener is slow
   lastM5: number | null;         // previous volume.m5 reading; null = not yet polled
   windowStartedAt: number | null;// when we detected a clean m5 window boundary; null = not yet aligned
+  h1AtWindowStart: number | null;// volume.h1 snapshot at alignment; delta gives true volume since alignment
 }
 
 let bondNotify: BondNotifyFn | null = null;
@@ -112,7 +112,7 @@ function connect(): void {
       }
 
       logger.info("PumpFun migration — queued for volume tracking", { mint: event.mint });
-      pendingBonds.set(event.mint, { bondedAt: Date.now(), rawEvent: event, lastM5: null, windowStartedAt: null });
+      pendingBonds.set(event.mint, { bondedAt: Date.now(), rawEvent: event, lastM5: null, windowStartedAt: null, h1AtWindowStart: null });
     } catch (err) {
       logger.warn("PumpFun bond event parse error", { error: String(err) });
     }
@@ -184,28 +184,29 @@ async function pollPendingBonds(): Promise<void> {
         bond.lastM5 = volumeM5;
         if (windowBoundary) {
           bond.windowStartedAt = now;
+          bond.h1AtWindowStart = volumeH1;
           logger.info("PumpFun m5 window aligned", {
             symbol: pair.baseToken?.symbol ?? mint.slice(0, 8),
             reason: volumeM5 === 0 ? "m5=0" : "m5 drop",
+            h1AtWindowStart: volumeH1,
           });
         }
         continue; // don't evaluate on the alignment poll itself
       }
 
-      const ageMins = (now - bond.windowStartedAt) / 60_000;
-      if (ageMins < MIN_AGE_MINS) continue; // wait for first full aligned window
-
-      const thresholdM5 = VOLUME_TARGET * (Math.exp(-LAMBDA * (ageMins - 5)) - Math.exp(-LAMBDA * ageMins));
-      const thresholdH1 = VOLUME_TARGET * (1 - Math.exp(-LAMBDA * ageMins));
+      const ageMins       = (now - bond.windowStartedAt) / 60_000;
+      const volumeSinceAlignment = Math.max(0, volumeH1 - bond.h1AtWindowStart!);
+      const thresholdM5   = VOLUME_TARGET * (Math.exp(-LAMBDA * (ageMins - 5)) - Math.exp(-LAMBDA * ageMins));
+      const thresholdH1   = VOLUME_TARGET * (1 - Math.exp(-LAMBDA * ageMins));
 
       logger.info("PumpFun volume check", {
-        symbol:      pair.baseToken?.symbol ?? mint.slice(0, 8),
-        ageMins:     ageMins.toFixed(1),
-        volumeM5,    thresholdM5: thresholdM5.toFixed(0),
-        volumeH1,    thresholdH1: thresholdH1.toFixed(0),
+        symbol:    pair.baseToken?.symbol ?? mint.slice(0, 8),
+        ageMins:   ageMins.toFixed(1),
+        volumeM5,          thresholdM5: thresholdM5.toFixed(0),
+        volumeSinceAlignment, thresholdH1: thresholdH1.toFixed(0),
       });
 
-      if (volumeM5 >= thresholdM5 && volumeH1 >= thresholdH1) {
+      if (volumeM5 >= thresholdM5 && volumeSinceAlignment >= thresholdH1) {
         pendingBonds.delete(mint);
 
         const imageUri = await getOnChainImage(mint);
