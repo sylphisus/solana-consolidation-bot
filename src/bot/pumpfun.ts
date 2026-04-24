@@ -21,11 +21,12 @@ export type BondNotifyFn = (event: BondEvent) => Promise<void>;
 
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
-/** Rate threshold: token must be on pace for $100k in 45 min.
- *  45 min / 5 min = 9 windows → require $100k / 9 ≈ $11,111 per m5 window. */
-const VOLUME_TARGET   = 100_000;
-const WINDOW_MINS     = 45;
-const M5_THRESHOLD    = VOLUME_TARGET / (WINDOW_MINS / 5); // ~$11,111
+/** Exponential decay threshold: threshold(t) = VOLUME_TARGET * (1 - e^(-λt))
+ *  Models front-loaded pump.fun volume. Half-life = 10 min means a token
+ *  on pace must have ~$50k by 10 min, ~$75k by 20 min, ~$100k asymptotically. */
+const VOLUME_TARGET  = 100_000;
+const HALF_LIFE_MINS = 10;
+const LAMBDA         = Math.LN2 / HALF_LIFE_MINS; // ≈ 0.0693
 
 /** Stop tracking a token after this many minutes without hitting the line */
 const MAX_TRACK_MINS = 90;
@@ -166,17 +167,17 @@ async function pollPendingBonds(): Promise<void> {
 
       const bond = pendingBonds.get(mint)!;
       const ageMins  = (now - bond.bondedAt) / 60_000;
-      const volumeM5: number = pair.volume?.m5 ?? 0;
+      const threshold = VOLUME_TARGET * (1 - Math.exp(-LAMBDA * ageMins));
       const volumeH1: number = pair.volume?.h1 ?? 0;
 
       logger.info("PumpFun volume check", {
         symbol:    pair.baseToken?.symbol ?? mint.slice(0, 8),
         ageMins:   ageMins.toFixed(1),
-        volumeM5,
-        threshold: M5_THRESHOLD.toFixed(0),
+        volumeH1,
+        threshold: threshold.toFixed(0),
       });
 
-      if (volumeM5 >= M5_THRESHOLD) {
+      if (volumeH1 >= threshold) {
         pendingBonds.delete(mint);
 
         const imageUri = await getOnChainImage(mint);
