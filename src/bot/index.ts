@@ -421,7 +421,7 @@ async function main(): Promise<void> {
             event.marketCap, event.volumeH1, event.ageMins,
             event.imageUri
           );
-        }, 0.3);
+        }, 1.0);
       } else {
         stopBondMonitor();
       }
