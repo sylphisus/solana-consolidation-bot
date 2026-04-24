@@ -21,12 +21,16 @@ export type BondNotifyFn = (event: BondEvent) => Promise<void>;
 
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
-/** Exponential decay threshold: threshold(t) = VOLUME_TARGET * (1 - e^(-λt))
- *  Models front-loaded pump.fun volume. Half-life = 10 min means a token
- *  on pace must have ~$50k by 10 min, ~$75k by 20 min, ~$100k asymptotically. */
+/** Exponential decay threshold applied to 5-minute volume windows.
+ *  First check at MIN_AGE_MINS; each poll compares volume.m5 against the
+ *  expected 5-min slice of the decay curve:
+ *    threshold_m5(t) = VOLUME_TARGET * (e^(-λ(t-5)) - e^(-λt))
+ *  With a 10-min half-life this gives:
+ *    t=5min  → ~$29k   t=10min → ~$21k   t=20min → ~$10k   t=30min → ~$5k  */
 const VOLUME_TARGET  = 100_000;
 const HALF_LIFE_MINS = 10;
 const LAMBDA         = Math.LN2 / HALF_LIFE_MINS; // ≈ 0.0693
+const MIN_AGE_MINS   = 5;                          // don't evaluate before first full m5 window
 
 /** Stop tracking a token after this many minutes without hitting the line */
 const MAX_TRACK_MINS = 90;
@@ -167,17 +171,21 @@ async function pollPendingBonds(): Promise<void> {
 
       const bond = pendingBonds.get(mint)!;
       const ageMins  = (now - bond.bondedAt) / 60_000;
-      const threshold = VOLUME_TARGET * (1 - Math.exp(-LAMBDA * ageMins));
+
+      if (ageMins < MIN_AGE_MINS) continue; // wait for first full m5 window
+
+      const threshold = VOLUME_TARGET * (Math.exp(-LAMBDA * (ageMins - 5)) - Math.exp(-LAMBDA * ageMins));
+      const volumeM5: number = pair.volume?.m5 ?? 0;
       const volumeH1: number = pair.volume?.h1 ?? 0;
 
       logger.info("PumpFun volume check", {
         symbol:    pair.baseToken?.symbol ?? mint.slice(0, 8),
         ageMins:   ageMins.toFixed(1),
-        volumeH1,
+        volumeM5,
         threshold: threshold.toFixed(0),
       });
 
-      if (volumeH1 >= threshold) {
+      if (volumeM5 >= threshold) {
         pendingBonds.delete(mint);
 
         const imageUri = await getOnChainImage(mint);
