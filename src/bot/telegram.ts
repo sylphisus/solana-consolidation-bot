@@ -31,6 +31,7 @@ export interface TelegramCallbacks {
   resetAtl: (mint: string) => string;
   setBondMonitor: (enabled: boolean) => void;
   getBondMonitorEnabled: () => boolean;
+  getPendingBonds: () => { mint: string; bondedAt: number }[];
   getWatchedWallet: () => string | null;
   setWatchedWallet: (wallet: string | null) => Promise<void>;
 }
@@ -193,6 +194,9 @@ function mainMenuKeyboard() {
     [Markup.button.callback("⚙️ Token Settings", "cmd:settings")],
     [Markup.button.callback("🧪 Test Sell",      "cmd:testsell")],
     [Markup.button.callback(bondLabel,           "cmd:togglebond")],
+    ...(callbacks?.getBondMonitorEnabled()
+      ? [[Markup.button.callback("🗺 Bonding Map", "cmd:bondmap")]]
+      : []),
     [Markup.button.callback(walletLabel,         "cmd:watchwallet")],
   ]);
 }
@@ -262,6 +266,28 @@ This will sell your ENTIRE balance immediately.`,
             ? "🔗 *Bond Monitor ON* — you'll be notified when tokens bond on PumpFun."
             : "🔗 *Bond Monitor OFF* — bond notifications paused.",
           { parse_mode: "Markdown", ...mainMenuKeyboard() }
+        );
+        return;
+      }
+      case "bondmap": {
+        if (!callbacks) return;
+        const bonds = callbacks.getPendingBonds();
+        if (bonds.length === 0) {
+          ctx.reply("🗺 *Bonding Map* — empty, no tokens currently tracked.", {
+            parse_mode: "Markdown", ...backKeyboard(),
+          });
+          return;
+        }
+        const now = Date.now();
+        const lines = bonds.map(({ mint, bondedAt }) => {
+          const ageMins = (now - bondedAt) / 60_000;
+          const ageStr = ageMins < 1 ? "<1 min" : `${Math.round(ageMins)} min`;
+          return `\`${mint}\` — ${ageStr}`;
+        });
+        ctx.reply(
+          `🗺 *Bonding Map* — ${bonds.length} token${bonds.length !== 1 ? "s" : ""} tracked\n\n` +
+          lines.join("\n"),
+          { parse_mode: "Markdown", ...backKeyboard() }
         );
         return;
       }
@@ -954,18 +980,15 @@ export async function notifyInvalidation(
 
 export async function notifyNewBond(
   mint: string, name: string, symbol: string,
-  description: string, marketCap: number,
-  feesSol: number | null, imageUri?: string
+  marketCap: number, volumeH1: number, ageMins: number,
+  imageUri?: string
 ): Promise<void> {
   if (!tg || !authorizedChatId) return;
-  const desc = description.trim();
-  const descLine = desc ? `\n📝 _${desc.length > 200 ? desc.slice(0, 200) + "…" : desc}_\n` : "";
-  const feesLine = feesSol !== null ? `Fees paid: \`${feesSol.toFixed(3)} SOL\`\n` : "";
+  const ageStr = ageMins < 1 ? "<1 min" : `${Math.round(ageMins)} min`;
   const caption =
     `🔗 *New Bond — ${name} (${symbol})*\n\n` +
     `Mcap: \`${fmtMc(marketCap)}\`\n` +
-    feesLine +
-    descLine +
+    `Volume: \`${fmtMc(volumeH1)}\` in ${ageStr} 🚀\n` +
     `\n[pump.fun](https://pump.fun/${mint})  •  [DexScreener](https://dexscreener.com/solana/${mint})`;
 
   try {

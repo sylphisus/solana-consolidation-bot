@@ -23,7 +23,7 @@ import {
   notifyWalletBuy,
   notifyWalletFullSell,
 } from "./telegram";
-import { startBondMonitor, stopBondMonitor } from "./pumpfun";
+import { startBondMonitor, stopBondMonitor, getPendingBonds } from "./pumpfun";
 import { createWalletWatcher } from "./wallet-watcher";
 import fs from "fs";
 import path from "path";
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
   const mints: string[] = config.tokens.map((t) => t.mint);
   const sellInProgress  = new Set<string>();
   const staleTokens     = new Set<string>(); // mints currently without a price feed
-  let bondMonitorEnabled = false;
+  let bondMonitorEnabled = true;
 
   // ── Wallet watcher ───────────────────────────────────────────────────────────
   const walletWatcher = await createWalletWatcher(
@@ -418,8 +418,8 @@ async function main(): Promise<void> {
         startBondMonitor(connection, async (event) => {
           await notifyNewBond(
             event.mint, event.name, event.symbol,
-            event.description, event.marketCap,
-            event.feesSol, event.imageUri
+            event.marketCap, event.volumeH1, event.ageMins,
+            event.imageUri
           );
         }, 0.3);
       } else {
@@ -428,6 +428,7 @@ async function main(): Promise<void> {
     },
 
     getBondMonitorEnabled: () => bondMonitorEnabled,
+    getPendingBonds: () => getPendingBonds(),
 
     getWatchedWallet: () => config.watchedWallet ?? null,
 
@@ -458,6 +459,14 @@ async function main(): Promise<void> {
         });
     })
   );
+
+  startBondMonitor(connection, async (event) => {
+    await notifyNewBond(
+      event.mint, event.name, event.symbol,
+      event.marketCap, event.volumeH1, event.ageMins,
+      event.imageUri
+    );
+  }, 0.3);
 
   logger.info(`Bot live — polling every ${POLL_INTERVAL_MS}ms via DexScreener`, {
     wallet: keypair.publicKey.toBase58(),
