@@ -176,18 +176,19 @@ async function pollPendingBonds(): Promise<void> {
 
       if (ageMins < MIN_AGE_MINS) continue; // wait for first full m5 window
 
-      const threshold = VOLUME_TARGET * (Math.exp(-LAMBDA * (ageMins - 5)) - Math.exp(-LAMBDA * ageMins));
+      const thresholdM5 = VOLUME_TARGET * (Math.exp(-LAMBDA * (ageMins - 5)) - Math.exp(-LAMBDA * ageMins));
+      const thresholdH1 = VOLUME_TARGET * (1 - Math.exp(-LAMBDA * ageMins));
       const volumeM5: number = pair.volume?.m5 ?? 0;
       const volumeH1: number = pair.volume?.h1 ?? 0;
 
       logger.info("PumpFun volume check", {
-        symbol:    pair.baseToken?.symbol ?? mint.slice(0, 8),
-        ageMins:   ageMins.toFixed(1),
-        volumeM5,
-        threshold: threshold.toFixed(0),
+        symbol:      pair.baseToken?.symbol ?? mint.slice(0, 8),
+        ageMins:     ageMins.toFixed(1),
+        volumeM5,    thresholdM5: thresholdM5.toFixed(0),
+        volumeH1,    thresholdH1: thresholdH1.toFixed(0),
       });
 
-      if (volumeM5 >= threshold) {
+      if (volumeM5 >= thresholdM5 && volumeH1 >= thresholdH1) {
         pendingBonds.delete(mint);
 
         const imageUri = await getOnChainImage(mint);
