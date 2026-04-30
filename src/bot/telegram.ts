@@ -102,7 +102,7 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("menu",   (ctx) => { wizardState.delete(ctx.chat.id); sendHome(ctx); });
   bot.command("cancel", (ctx) => { wizardState.delete(ctx.chat.id); ctx.reply("Cancelled."); sendHome(ctx); });
 
-  bot.command("status",      cmdStatus);
+  bot.command("status",      cmdTokens);
   bot.command("trades",      cmdTrades);
   bot.command("removetoken", (ctx) => startRemoveToken(ctx));
   bot.command("remove",      (ctx) => cmdRemoveByTicker(ctx));
@@ -249,7 +249,7 @@ This will sell your ENTIRE balance immediately.`,
 
   if (data.startsWith("cmd:")) {
     switch (data.slice(4)) {
-      case "status":      return cmdStatus(ctx);
+      case "status":      return cmdTokens(ctx);
       case "trades":      return cmdTrades(ctx);
       case "removetoken":     return startRemoveToken(ctx, false);
       case "removetoken_all": return startRemoveToken(ctx, true);
@@ -334,53 +334,69 @@ function showWatchWalletMenu(ctx: Context): void {
 
 // ─── Info Commands ─────────────────────────────────────────────────────────────
 
-async function cmdStatus(ctx: Context): Promise<void> {
+async function cmdTokens(ctx: Context): Promise<void> {
   if (!callbacks) return;
   const state  = callbacks.getState();
   const tokens = callbacks.getTokenList();
 
   const now = Date.now();
-  let msg = `*Bot Status*\n`;
-  msg += `⏱ Uptime: \`${fmtUptime(now - state.startTime)}\`  📈 Trades: \`${state.totalTradesExecuted}\`\n`;
-  msg += `◎ SOL: \`${state.solBalance.toFixed(4)}\`\n\n`;
+  const header =
+    `*Bot Status*\n` +
+    `⏱ Uptime: \`${fmtUptime(now - state.startTime)}\`  📈 Trades: \`${state.totalTradesExecuted}\`\n` +
+    `◎ SOL: \`${state.solBalance.toFixed(4)}\`\n\n`;
 
   if (tokens.length === 0) {
-    msg += "_No tokens being watched._";
-  } else {
-    msg += `🪙 *Total tokens:* \`${tokens.length}\`\n\n`;
-    const sorted = [...tokens].sort((a, b) => {
-      const mcA = state.tokens.get(a.mint)?.currentMarketCap ?? -1;
-      const mcB = state.tokens.get(b.mint)?.currentMarketCap ?? -1;
-      return mcB - mcA;
-    });
-    for (const t of sorted) {
-      const ts = state.tokens.get(t.mint);
-      const tc = callbacks.getConfig(t.mint);
-      if (!ts || !tc) continue;
-
-      const mc    = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "—";
-      const ui    = toUiAmount(ts.balance, ts.decimals);
-      const stale = ts.lastUpdated === null || (now - ts.lastUpdated) > 30_000;
-      const ago   = ts.lastUpdated ? `${Math.round((now - ts.lastUpdated) / 1000)}s ago` : "no feed";
-
-      msg += `${stale ? "⚠️ " : ""}*${ts.symbol}* \`#${t.id}\`${stale ? " _(no price feed)_" : ""}\n`;
-      msg += `  Mcap: \`${mc}\`  _(${ago})_\n`;
-      msg += `  Balance: \`${ui.toLocaleString()}\`\n`;
-      msg += `  Buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold}\`\n`;
-
-      const hot = getHottestLevels(ts, 3);
-      if (hot.length > 0) {
-        for (const l of hot) {
-          const bar = progBar(l.touchCount, tc.touchThreshold);
-          const lastAgo = l.lastTouchTime ? `${Math.round((Date.now() - l.lastTouchTime) / 1000)}s ago` : "never";
-          msg += `  \`${fmtMc(l.value)}\` ${bar} ${l.touchCount}/${tc.touchThreshold} _(${lastAgo})_\n`;
-        }
-      }
-      msg += "\n";
-    }
+    await ctx.reply(header + "_No tokens being watched._", { parse_mode: "Markdown", ...backKeyboard() });
+    return;
   }
 
-  ctx.reply(msg, { parse_mode: "Markdown", ...backKeyboard() });
+  const sorted = [...tokens].sort((a, b) => {
+    const mcA = state.tokens.get(a.mint)?.currentMarketCap ?? -1;
+    const mcB = state.tokens.get(b.mint)?.currentMarketCap ?? -1;
+    return mcB - mcA;
+  });
+
+  const chunks: string[] = [];
+  let current = header + `🪙 *Total tokens:* \`${tokens.length}\`\n\n`;
+
+  for (const t of sorted) {
+    const ts = state.tokens.get(t.mint);
+    const tc = callbacks.getConfig(t.mint);
+    if (!ts || !tc) continue;
+
+    const mc    = ts.currentMarketCap != null ? fmtMc(ts.currentMarketCap) : "—";
+    const ui    = toUiAmount(ts.balance, ts.decimals);
+    const stale = ts.lastUpdated === null || (now - ts.lastUpdated) > 30_000;
+    const ago   = ts.lastUpdated ? `${Math.round((now - ts.lastUpdated) / 1000)}s ago` : "no feed";
+
+    let block = `${stale ? "⚠️ " : ""}*${ts.symbol}* \`#${t.id}\`${stale ? " _(no price feed)_" : ""}\n`;
+    block += `  Mcap: \`${mc}\`  _(${ago})_\n`;
+    block += `  Balance: \`${ui.toLocaleString()}\`\n`;
+    block += `  Buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`  Spacing: \`${fmtMc(tc.levelSpacingUsd)}\`  Threshold: \`${tc.touchThreshold}\`\n`;
+
+    const hot = getHottestLevels(ts, 3);
+    for (const l of hot) {
+      const bar = progBar(l.touchCount, tc.touchThreshold);
+      const lastAgo = l.lastTouchTime ? `${Math.round((Date.now() - l.lastTouchTime) / 1000)}s ago` : "never";
+      block += `  \`${fmtMc(l.value)}\` ${bar} ${l.touchCount}/${tc.touchThreshold} _(${lastAgo})_\n`;
+    }
+    block += "\n";
+
+    if (current.length + block.length > 3800) {
+      chunks.push(current);
+      current = block;
+    } else {
+      current += block;
+    }
+  }
+  if (current) chunks.push(current);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const opts = i === chunks.length - 1
+      ? { parse_mode: "Markdown" as const, ...backKeyboard() }
+      : { parse_mode: "Markdown" as const };
+    await ctx.reply(chunks[i], opts);
+  }
 }
 
 async function cmdTrades(ctx: Context): Promise<void> {
