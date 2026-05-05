@@ -427,6 +427,12 @@ async function main(): Promise<void> {
       }
     },
 
+    resetTokenIds: () => {
+      config.tokens.forEach((t, i) => { t.id = i + 1; });
+      config.nextTokenId = config.tokens.length + 1;
+      saveConfig(config);
+    },
+
     getBondMonitorEnabled: () => bondMonitorEnabled,
     getPendingBonds: () => getPendingBonds(),
 

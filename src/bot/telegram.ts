@@ -34,6 +34,7 @@ export interface TelegramCallbacks {
   getPendingBonds: () => { mint: string; bondedAt: number }[];
   getWatchedWallet: () => string | null;
   setWatchedWallet: (wallet: string | null) => Promise<void>;
+  resetTokenIds: () => void;
 }
 
 // ─── Wizard State ─────────────────────────────────────────────────────────────
@@ -198,6 +199,7 @@ function mainMenuKeyboard() {
       ? [[Markup.button.callback("🗺 Bonding Map", "cmd:bondmap")]]
       : []),
     [Markup.button.callback(walletLabel,         "cmd:watchwallet")],
+    [Markup.button.callback("🔢 Reset Token Numbers", "cmd:resetids")],
   ]);
 }
 
@@ -289,6 +291,14 @@ This will sell your ENTIRE balance immediately.`,
           lines.join("\n"),
           { parse_mode: "Markdown", ...backKeyboard() }
         );
+        return;
+      }
+      case "resetids": {
+        if (!callbacks) return;
+        callbacks.resetTokenIds();
+        ctx.reply("🔢 *Token numbers reset.* Tokens are now numbered starting from #1.", {
+          parse_mode: "Markdown", ...mainMenuKeyboard(),
+        });
         return;
       }
       case "watchwallet": return showWatchWalletMenu(ctx);
@@ -603,7 +613,7 @@ function startSettings(ctx: Context, showAll: boolean): void {
 
 // ─── Settings Field Display ───────────────────────────────────────────────────
 
-function showSettingsForToken(ctx: Context, mint: string, symbol: string): void {
+function showSettingsForToken(ctx: Context, mint: string, symbol: string, page: 1 | 2 = 1): void {
   const tc = callbacks!.getConfig(mint)!;
   const ts = callbacks!.getState().tokens.get(mint);
   ctx.reply(
@@ -626,9 +636,15 @@ function showSettingsForToken(ctx: Context, mint: string, symbol: string): void 
     `\nWhich setting do you want to change?`,
     {
       parse_mode: "Markdown",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("💵 Avg Buy Mcap",      "wiz:field:buyMcap")],
-        [Markup.button.callback("📏 Level Spacing",    "wiz:field:levelSpacingUsd")],
+      ...Markup.inlineKeyboard(page === 1 ? [
+        [Markup.button.callback("💵 Avg Buy Mcap",   "wiz:field:buyMcap")],
+        [Markup.button.callback("📏 Level Spacing",  "wiz:field:levelSpacingUsd")],
+        ...(tc.priceTracking ? [
+          [Markup.button.callback("🔄 Reset ATL", "wiz:reset_atl")],
+        ] : []),
+        [Markup.button.callback("▼ More settings",  "wiz:settings_p2")],
+        [Markup.button.callback("« Back to menu",   "cmd:home")],
+      ] : [
         [Markup.button.callback("👆 Touch Threshold",  "wiz:field:touchThreshold")],
         [Markup.button.callback("↔️ Hysteresis %",     "wiz:field:hysteresisPct")],
         [Markup.button.callback("↔️ Hysteresis $",     "wiz:field:hysteresisUsd")],
@@ -640,9 +656,9 @@ function showSettingsForToken(ctx: Context, mint: string, symbol: string): void 
         ...(tc.priceTracking ? [
           [Markup.button.callback("🔻 ATL Alert Spacing", "wiz:field:atlAlertSpacingUsd")],
           [Markup.button.callback("🚀 Upside Alert %",    "wiz:field:upsideAlertPct")],
-          [Markup.button.callback("🔄 Reset ATL",         "wiz:reset_atl")],
         ] : []),
-        [Markup.button.callback("« Back to menu", "cmd:home")],
+        [Markup.button.callback("▲ Back",            "wiz:settings_p1")],
+        [Markup.button.callback("« Back to menu",    "cmd:home")],
       ]),
     }
   );
@@ -668,7 +684,16 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
       const result = callbacks!.resetAtl(mint);
       ctx.reply(result, { parse_mode: "Markdown" });
       wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
-      showSettingsForToken(ctx, mint, symbol);
+      showSettingsForToken(ctx, mint, symbol, 1);
+    }
+    return;
+  }
+
+  if (payload === "settings_p2" || payload === "settings_p1") {
+    if (wizard?.flow === "settings" && (wizard.step === "await_field" || wizard.step === "await_value")) {
+      const { mint, symbol } = wizard as any;
+      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      showSettingsForToken(ctx, mint, symbol, payload === "settings_p2" ? 2 : 1);
     }
     return;
   }

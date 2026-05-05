@@ -8,7 +8,7 @@ export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // ─── DexScreener API ──────────────────────────────────────────────────────────
 // Batch endpoint: up to 30 comma-separated mints in one request.
-// Rate limit: 300 req/min for the /tokens/v1 endpoint.
+// Rate limit: 300 req/min for the /tokens/v1 endpoint (confirmed).
 
 const DEXSCREENER_BASE = "https://api.dexscreener.com/tokens/v1/solana";
 
@@ -92,10 +92,13 @@ async function runBatch(): Promise<void> {
 
       const marketCap = Number(pair.marketCap ?? pair.fdv ?? 0);
       const price     = parseFloat(pair.priceUsd ?? "0");
-      if (!marketCap || isNaN(price)) continue;
+      if (!marketCap || isNaN(price)) {
+        logger.warn(`[${entry.symbol}] DexScreener returned 0 market cap — pair: ${pair.dexId ?? "unknown"}, liq: $${pair.liquidity?.usd ?? 0}`);
+        continue;
+      }
 
       entry.callback({ mint, marketCap, price, timestamp: now });
-      logger.debug(`[${entry.symbol}] mcap: ${fmtMc(marketCap)} price: $${price}`);
+      logger.debug(`[${entry.symbol}] mcap: ${fmtMc(marketCap)} price: $${price} dex: ${pair.dexId} pair: ${pair.pairAddress?.slice(0, 8)}`);
     }
   } catch (err) {
     logger.warn("Batch DexScreener fetch failed", { error: String(err) });

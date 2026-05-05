@@ -106,12 +106,15 @@ function connect(): void {
       const feesSol: number | null =
         event.totalFeesSol ?? event.feesInSol ?? event.fees_in_sol ?? event.totalFees ?? null;
 
-      if (feesSol !== null && feesSol < minFeesSol) {
-        logger.info(`PumpFun: skipping ${event.symbol ?? event.mint} — fees ${feesSol} SOL < ${minFeesSol} SOL`);
+      // Only reject tokens with explicitly positive fees below threshold.
+      // Zero or missing fees pass through — LetsBonk.fun graduations don't report SOL fees.
+      if (feesSol !== null && feesSol > 0 && feesSol < minFeesSol) {
+        logger.info(`Bond monitor: skipping ${event.symbol ?? event.mint} — fees ${feesSol} SOL < ${minFeesSol} SOL`);
         return;
       }
 
-      logger.info("PumpFun migration — queued for volume tracking", { mint: event.mint });
+      const platform = event.txType ?? event.platform ?? (feesSol === null || feesSol === 0 ? "letsbonk?" : "pumpfun");
+      logger.info("Bond monitor: migration queued for volume tracking", { mint: event.mint, platform });
       pendingBonds.set(event.mint, { bondedAt: Date.now(), rawEvent: event, lastM5: null, windowStartedAt: null, h1AtWindowStart: null });
     } catch (err) {
       logger.warn("PumpFun bond event parse error", { error: String(err) });
