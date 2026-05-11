@@ -28,6 +28,10 @@ export interface WalletWatcher {
   setWallet: (wallet: string | null) => Promise<{ webhookId: string | null }>;
   getWallet: () => string | null;
   getWebhookId: () => string | null;
+  /** Update the extra addresses (balance monitor wallets) included in the shared webhook. */
+  setExtraAddresses: (addresses: string[]) => Promise<void>;
+  /** Register a secondary event handler called for every webhook event. */
+  registerEventHandler: (handler: (event: any) => Promise<void>) => void;
   stop: () => void;
 }
 
@@ -41,6 +45,14 @@ export async function createWalletWatcher(
 ): Promise<WalletWatcher> {
   let watchedWallet: string | null = initialWallet ?? null;
   let webhookId: string | null = null; // will be set after startup registration below
+  let extraAddresses: string[] = [];
+  const extraHandlers: ((event: any) => Promise<void>)[] = [];
+
+  function getAllAddresses(): string[] {
+    const all = new Set<string>(extraAddresses);
+    if (watchedWallet) all.add(watchedWallet);
+    return [...all];
+  }
 
   const port = parseInt(process.env.WEBHOOK_PORT || "4000", 10);
 
@@ -60,6 +72,11 @@ export async function createWalletWatcher(
           handleEvent(event).catch((err) =>
             logger.error("Wallet watcher: event handler error", { error: String(err) })
           );
+          for (const handler of extraHandlers) {
+            handler(event).catch((err) =>
+              logger.error("Webhook extra handler error", { error: String(err) })
+            );
+          }
         }
       } catch (err) {
         logger.error("Wallet watcher: failed to parse webhook body", { error: String(err) });
@@ -77,7 +94,7 @@ export async function createWalletWatcher(
     return m ? m[1] : null;
   }
 
-  async function registerWebhook(wallet: string): Promise<string | null> {
+  async function createWebhook(addresses: string[]): Promise<string | null> {
     const apiKey = getApiKey();
     const webhookUrl = process.env.WEBHOOK_URL;
 
@@ -96,8 +113,8 @@ export async function createWalletWatcher(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           webhookURL: webhookUrl,
-          transactionTypes: ["SWAP"],
-          accountAddresses: [wallet],
+          transactionTypes: ["SWAP", "TRANSFER"],
+          accountAddresses: addresses,
           webhookType: "enhanced",
         }),
       });
@@ -107,11 +124,36 @@ export async function createWalletWatcher(
         return null;
       }
       const data = (await res.json()) as { webhookID: string };
-      logger.info("Wallet watcher: webhook registered", { webhookId: data.webhookID, wallet });
+      logger.info("Wallet watcher: webhook registered", { webhookId: data.webhookID, addressCount: addresses.length });
       return data.webhookID;
     } catch (err) {
       logger.error("Wallet watcher: webhook registration error", { error: String(err) });
       return null;
+    }
+  }
+
+  async function updateWebhook(id: string, addresses: string[]): Promise<void> {
+    const apiKey = getApiKey();
+    const webhookUrl = process.env.WEBHOOK_URL;
+    if (!apiKey || !webhookUrl) return;
+    try {
+      const res = await fetch(`https://api.helius.xyz/v0/webhooks/${id}?api-key=${apiKey}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          webhookURL: webhookUrl,
+          transactionTypes: ["SWAP", "TRANSFER"],
+          accountAddresses: addresses,
+          webhookType: "enhanced",
+        }),
+      });
+      if (!res.ok) {
+        logger.warn("Wallet watcher: webhook update returned non-OK", { status: res.status, webhookId: id });
+      } else {
+        logger.info("Wallet watcher: webhook updated", { webhookId: id, addressCount: addresses.length });
+      }
+    } catch (err) {
+      logger.error("Wallet watcher: webhook update error", { error: String(err) });
     }
   }
 
@@ -175,11 +217,10 @@ export async function createWalletWatcher(
     }
   }
 
-  // ── Register webhook for initial wallet if one is configured ─────────────────
+  // ── Register webhook on startup (always re-create so URL stays current) ───────
   if (watchedWallet) {
-    // Always delete and re-register on startup so the URL is always up to date.
     if (initialWebhookId) await deleteWebhook(initialWebhookId);
-    webhookId = await registerWebhook(watchedWallet);
+    webhookId = await createWebhook(getAllAddresses());
   }
 
   // ── Public interface ─────────────────────────────────────────────────────────
@@ -188,16 +229,28 @@ export async function createWalletWatcher(
     getWebhookId: () => webhookId,
 
     setWallet: async (wallet: string | null) => {
-      // Tear down existing webhook
-      if (webhookId) {
-        await deleteWebhook(webhookId);
-        webhookId = null;
-      }
+      if (webhookId) { await deleteWebhook(webhookId); webhookId = null; }
       watchedWallet = wallet;
-      if (wallet) webhookId = await registerWebhook(wallet);
+      const all = getAllAddresses();
+      if (all.length > 0) webhookId = await createWebhook(all);
       return { webhookId };
     },
 
+    setExtraAddresses: async (addresses: string[]) => {
+      extraAddresses = addresses;
+      const all = getAllAddresses();
+      if (all.length === 0) {
+        if (webhookId) { await deleteWebhook(webhookId); webhookId = null; }
+        return;
+      }
+      if (!webhookId) {
+        webhookId = await createWebhook(all);
+      } else {
+        await updateWebhook(webhookId, all);
+      }
+    },
+
+    registerEventHandler: (handler) => { extraHandlers.push(handler); },
     stop: () => { server.close(); },
   };
 }

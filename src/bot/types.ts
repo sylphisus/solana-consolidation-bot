@@ -25,12 +25,22 @@ export interface GlobalConfig {
   minSolBalance: number;
 }
 
+export interface BalanceMonitor {
+  id: number;
+  mint: string;
+  symbol: string;
+  wallets: string[];
+}
+
 export interface BotConfig {
   tokens: TokenConfig[];
   global: GlobalConfig;
   nextTokenId: number;  // auto-increment counter for token IDs
   watchedWallet?: string;          // wallet address to mirror buys/sells from
   watchedWalletWebhookId?: string; // Helius webhook ID for the watched wallet
+  balanceMonitors?: BalanceMonitor[];
+  balanceMonitorWebhookId?: string; // Helius webhook ID for the shared balance monitor
+  nextMonitorId?: number;
 }
 
 // ─── Runtime State Types ───────────────────────────────────────────────────────

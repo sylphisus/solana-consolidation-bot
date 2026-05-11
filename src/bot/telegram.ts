@@ -1,5 +1,5 @@
 import { Telegraf, Context, Markup } from "telegraf";
-import { BotState, TokenConfig, TradeRecord } from "./types";
+import { BotState, TokenConfig, TradeRecord, BalanceMonitor } from "./types";
 import { toUiAmount } from "./wallet";
 import { fetchTokenInfo } from "./price";
 import { getHottestLevels, fmtMc } from "./consolidation";
@@ -35,6 +35,12 @@ export interface TelegramCallbacks {
   getWatchedWallet: () => string | null;
   setWatchedWallet: (wallet: string | null) => Promise<void>;
   resetTokenIds: () => void;
+  getBalanceMonitors: () => BalanceMonitor[];
+  addBalanceMonitor: (mint: string, symbol: string, wallets: string[]) => Promise<string>;
+  removeBalanceMonitor: (id: number) => Promise<string>;
+  addWalletToMonitor: (id: number, wallet: string) => Promise<string>;
+  removeWalletFromMonitor: (id: number, walletIdx: number) => Promise<string>;
+  getWebhookSlotCount: () => { used: number; total: number };
 }
 
 // ─── Wizard State ─────────────────────────────────────────────────────────────
@@ -45,7 +51,10 @@ type WizardStep =
   | { flow: "settings";     step: "await_token" }
   | { flow: "settings";     step: "await_field";   mint: string; symbol: string }
   | { flow: "settings";     step: "await_value";   mint: string; symbol: string; field: SettingsField }
-  | { flow: "watch_wallet"; step: "await_address" };
+  | { flow: "watch_wallet"; step: "await_address" }
+  | { flow: "balance_monitor"; step: "await_mint" }
+  | { flow: "balance_monitor"; step: "await_wallets"; mint: string; symbol: string }
+  | { flow: "balance_monitor_add_wallet"; step: "await_wallet"; monitorId: number };
 
 type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "sellPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap";
 
@@ -140,9 +149,13 @@ function registerHandlers(bot: Telegraf): void {
   bot.on("text", async (ctx) => {
     const text = ((ctx.message as any)?.text ?? "").trim();
 
-    // Watch wallet wizard intercepts base58 input before CA detection
+    // Wizards that expect base58 input must intercept before CA auto-detection
     const activeWizard = wizardState.get(ctx.chat.id);
-    if (activeWizard?.flow === "watch_wallet" && activeWizard.step === "await_address") {
+    if (
+      (activeWizard?.flow === "watch_wallet" && activeWizard.step === "await_address") ||
+      activeWizard?.flow === "balance_monitor" ||
+      activeWizard?.flow === "balance_monitor_add_wallet"
+    ) {
       await handleWizardInput(ctx, activeWizard);
       return;
     }
@@ -188,6 +201,10 @@ function mainMenuKeyboard() {
   const walletLabel = wallet
     ? `👁 Watch Wallet: ${wallet.slice(0, 4)}…${wallet.slice(-4)}`
     : "👁 Watch Wallet: OFF";
+  const monitorCount = callbacks?.getBalanceMonitors().length ?? 0;
+  const balanceMonitorLabel = monitorCount > 0
+    ? `📊 Balance Monitors (${monitorCount})`
+    : "📊 Balance Monitors: OFF";
   return Markup.inlineKeyboard([
     [Markup.button.callback("🪙 Tokens",        "cmd:status")],
     [Markup.button.callback("📋 Trade History", "cmd:trades")],
@@ -199,6 +216,7 @@ function mainMenuKeyboard() {
       ? [[Markup.button.callback("🗺 Bonding Map", "cmd:bondmap")]]
       : []),
     [Markup.button.callback(walletLabel,         "cmd:watchwallet")],
+    [Markup.button.callback(balanceMonitorLabel, "cmd:balancemonitors")],
     [Markup.button.callback("🔢 Reset Token Numbers", "cmd:resetids")],
   ]);
 }
@@ -318,7 +336,70 @@ This will sell your ENTIRE balance immediately.`,
         });
         return;
       }
+      case "balancemonitors": return showBalanceMonitorsMenu(ctx);
+      case "bm_add": {
+        wizardState.set(ctx.chat!.id, { flow: "balance_monitor", step: "await_mint" });
+        ctx.reply(
+          "📊 *Balance Monitor — New*\n\nPaste the token CA you want to track.\n\n/cancel to go back",
+          { parse_mode: "Markdown" }
+        );
+        return;
+      }
     }
+  }
+
+  // Balance monitor — remove confirm
+  if (data.startsWith("wiz:bm_rm:")) {
+    const id = parseInt(data.split(":")[2], 10);
+    const monitor = callbacks?.getBalanceMonitors().find((m) => m.id === id);
+    if (!monitor) { ctx.reply("Monitor not found."); return; }
+    ctx.reply(
+      `📊 Remove monitor for *${monitor.symbol}*?\n\nThis will stop watching ${monitor.wallets.length} wallet(s).`,
+      {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("🗑 Yes, remove", `wiz:bm_rm_ok:${id}`)],
+          [Markup.button.callback("« Cancel", "cmd:balancemonitors")],
+        ]),
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith("wiz:bm_rm_ok:")) {
+    if (!callbacks) return;
+    const id = parseInt(data.split(":")[2], 10);
+    const result = await callbacks.removeBalanceMonitor(id);
+    ctx.reply(result, { parse_mode: "Markdown", ...mainMenuKeyboard() });
+    return;
+  }
+
+  // Balance monitor — show detail / manage wallets
+  if (data.startsWith("wiz:bm_detail:")) {
+    const id = parseInt(data.split(":")[2], 10);
+    return showMonitorDetail(ctx, id);
+  }
+
+  // Balance monitor — add wallet to existing monitor
+  if (data.startsWith("wiz:bm_aw:")) {
+    const monitorId = parseInt(data.split(":")[2], 10);
+    wizardState.set(ctx.chat!.id, { flow: "balance_monitor_add_wallet", step: "await_wallet", monitorId });
+    ctx.reply(
+      "📊 Paste the wallet address to add.\n\n/cancel to go back",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  // Balance monitor — remove wallet
+  if (data.startsWith("wiz:bm_rmw:")) {
+    if (!callbacks) return;
+    const parts = data.split(":");
+    const monitorId  = parseInt(parts[2], 10);
+    const walletIdx  = parseInt(parts[3], 10);
+    const result = await callbacks.removeWalletFromMonitor(monitorId, walletIdx);
+    ctx.reply(result, { parse_mode: "Markdown" });
+    return showMonitorDetail(ctx, monitorId);
   }
 }
 
@@ -338,6 +419,66 @@ function showWatchWalletMenu(ctx: Context): void {
         : [Markup.button.callback("➕ Set Wallet",    "cmd:watchwallet_set")],
       ...(wallet ? [[Markup.button.callback("🗑 Clear Wallet", "cmd:watchwallet_clear")]] : []),
       [Markup.button.callback("« Back to menu", "cmd:home")],
+    ]),
+  });
+}
+
+// ─── Balance Monitors Menu ────────────────────────────────────────────────────
+
+function showBalanceMonitorsMenu(ctx: Context): void {
+  if (!callbacks) return;
+  const monitors = callbacks.getBalanceMonitors();
+  const { used, total } = callbacks.getWebhookSlotCount();
+
+  const lines = monitors.length === 0
+    ? ["No monitors active."]
+    : monitors.map((m) => `*${m.symbol}* — ${m.wallets.length} wallet(s)`);
+
+  const msg =
+    `📊 *Balance Monitors*\n\n` +
+    `${lines.join("\n")}\n\n` +
+    `_Helius webhook slots: ${used}/${total} used_\n` +
+    `_All monitors share one webhook slot._`;
+
+  const monitorButtons = monitors.map((m) =>
+    [Markup.button.callback(`📋 ${m.symbol}`, `wiz:bm_detail:${m.id}`)]
+  );
+
+  ctx.reply(msg, {
+    parse_mode: "Markdown",
+    ...Markup.inlineKeyboard([
+      ...monitorButtons,
+      [Markup.button.callback("➕ Add Monitor", "cmd:bm_add")],
+      [Markup.button.callback("« Back to menu", "cmd:home")],
+    ]),
+  });
+}
+
+function showMonitorDetail(ctx: Context, monitorId: number): void {
+  if (!callbacks) return;
+  const monitor = callbacks.getBalanceMonitors().find((m) => m.id === monitorId);
+  if (!monitor) { ctx.reply("Monitor not found."); return; }
+
+  const walletLines = monitor.wallets.length === 0
+    ? ["_No wallets yet._"]
+    : monitor.wallets.map((w, i) => `${i + 1}. \`${w.slice(0, 4)}…${w.slice(-4)}\``);
+
+  const msg =
+    `📊 *${monitor.symbol}*\n\`${monitor.mint}\`\n\n` +
+    `*Watching ${monitor.wallets.length} wallet(s):*\n` +
+    walletLines.join("\n");
+
+  const removeWalletButtons = monitor.wallets.map((w, i) =>
+    [Markup.button.callback(`🗑 ${w.slice(0, 4)}…${w.slice(-4)}`, `wiz:bm_rmw:${monitorId}:${i}`)]
+  );
+
+  ctx.reply(msg, {
+    parse_mode: "Markdown",
+    ...Markup.inlineKeyboard([
+      ...removeWalletButtons,
+      [Markup.button.callback("➕ Add Wallet", `wiz:bm_aw:${monitorId}`)],
+      [Markup.button.callback("🗑 Remove Monitor", `wiz:bm_rm:${monitorId}`)],
+      [Markup.button.callback("« Back", "cmd:balancemonitors")],
     ]),
   });
 }
@@ -522,12 +663,20 @@ function cmdRemoveByTicker(ctx: Context): void {
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     const isId = /^\d+$/.test(token);
+    const isMint = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(token);
 
     if (isId) {
       const id = parseInt(token, 10);
       const match = all.find(t => t.id === id);
       if (!match) {
         notFound.push(`#${id}`);
+      } else {
+        removed.push(callbacks.removeToken(match.mint));
+      }
+    } else if (isMint) {
+      const match = all.find(t => t.mint === token);
+      if (!match) {
+        notFound.push(`\`${token.slice(0, 4)}…${token.slice(-4)}\``);
       } else {
         removed.push(callbacks.removeToken(match.mint));
       }
@@ -826,6 +975,59 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
     return;
   }
 
+  // ── BALANCE MONITOR ───────────────────────────────────────────────────────
+  if (wizard.flow === "balance_monitor") {
+    if (wizard.step === "await_mint") {
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+        ctx.reply("❌ That doesn't look like a valid Solana CA.\n\n/cancel to go back");
+        return;
+      }
+      ctx.reply("⏳ Fetching token info...");
+      try {
+        const { symbol } = await fetchTokenInfo(text);
+        wizardState.set(chatId, { flow: "balance_monitor", step: "await_wallets", mint: text, symbol });
+        ctx.reply(
+          `📊 *${symbol}*\n\nPaste the wallet addresses to watch (one per line or comma-separated).\n\n/cancel to go back`,
+          { parse_mode: "Markdown" }
+        );
+      } catch {
+        ctx.reply("❌ Couldn't fetch token info. Check the CA and try again.\n\n/cancel to go back");
+      }
+      return;
+    }
+
+    if (wizard.step === "await_wallets") {
+      const { mint, symbol } = wizard;
+      const raw = text.split(/[\n,\s]+/).map((s: string) => s.trim()).filter(Boolean);
+      const valid   = raw.filter((s: string) =>  /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s));
+      const invalid = raw.filter((s: string) => !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s));
+
+      if (valid.length === 0) {
+        ctx.reply("❌ No valid Solana addresses found. Each must be 32–44 base58 chars.\n\n/cancel to go back");
+        return;
+      }
+
+      wizardState.delete(chatId);
+      const result = await callbacks!.addBalanceMonitor(mint, symbol, valid);
+      let reply = result;
+      if (invalid.length > 0) reply += `\n\n⚠️ ${invalid.length} invalid address(es) skipped.`;
+      ctx.reply(reply, { parse_mode: "Markdown", ...mainMenuKeyboard() });
+      return;
+    }
+  }
+
+  if (wizard.flow === "balance_monitor_add_wallet" && wizard.step === "await_wallet") {
+    const { monitorId } = wizard;
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+      ctx.reply("❌ Invalid Solana address.\n\n/cancel to go back");
+      return;
+    }
+    wizardState.delete(chatId);
+    const result = await callbacks!.addWalletToMonitor(monitorId, text);
+    ctx.reply(result, { parse_mode: "Markdown" });
+    return showMonitorDetail(ctx, monitorId);
+  }
+
   // ── SETTINGS ──────────────────────────────────────────────────────────────
   if (wizard.flow === "settings" && wizard.step === "await_value") {
     const { mint, symbol, field } = wizard;
@@ -1063,6 +1265,26 @@ export async function notifyWalletFullSell(mint: string, symbol: string): Promis
     `👁 *Wallet Full Sell Detected — ${symbol}*\n\n` +
     `The watched wallet fully exited this position.\n\n` +
     `🗑 Auto-removed from watchlist.`
+  );
+}
+
+export async function notifyBalanceTransfer(
+  wallet: string,
+  symbol: string,
+  direction: "in" | "out",
+  amount: number,
+): Promise<void> {
+  const dir   = direction === "in" ? "📈 Received" : "📉 Sent";
+  const short = `${wallet.slice(0, 4)}…${wallet.slice(-4)}`;
+  const fmt   = amount >= 1_000_000
+    ? `${(amount / 1_000_000).toFixed(2)}M`
+    : amount >= 1_000
+    ? `${(amount / 1_000).toFixed(2)}K`
+    : amount.toFixed(2);
+  await safeSend(
+    `📊 *Balance Monitor — ${symbol}*\n\n` +
+    `Wallet: \`${short}\`\n` +
+    `${dir}: ${fmt} ${symbol}`
   );
 }
 

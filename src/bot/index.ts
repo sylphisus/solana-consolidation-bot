@@ -22,9 +22,11 @@ import {
   notifyTokenRecovered,
   notifyWalletBuy,
   notifyWalletFullSell,
+  notifyBalanceTransfer,
 } from "./telegram";
 import { startBondMonitor, stopBondMonitor, getPendingBonds } from "./pumpfun";
 import { createWalletWatcher } from "./wallet-watcher";
+import { createBalanceMonitor } from "./balance-monitor";
 import fs from "fs";
 import path from "path";
 
@@ -51,8 +53,12 @@ function loadConfig(): BotConfig {
   const maxId = cfg.tokens.reduce((m, t) => Math.max(m, t.id), 0);
   if (cfg.nextTokenId <= maxId) cfg.nextTokenId = maxId + 1;
   // Back-fill wallet watcher fields
-  cfg.watchedWallet        ??= undefined;
+  cfg.watchedWallet          ??= undefined;
   cfg.watchedWalletWebhookId ??= undefined;
+  // Back-fill balance monitor fields
+  cfg.balanceMonitors          ??= [];
+  cfg.balanceMonitorWebhookId  ??= undefined;
+  cfg.nextMonitorId            ??= 1;
   return cfg;
 }
 
@@ -316,6 +322,34 @@ async function main(): Promise<void> {
     saveConfig(config);
   }
 
+  // ── Balance monitor ──────────────────────────────────────────────────────────
+  // One-time cleanup: delete the legacy separate balance-monitor webhook if it exists
+  if (config.balanceMonitorWebhookId) {
+    const apiKey = (process.env.RPC_ENDPOINT || "").match(/api-key=([^&/\s]+)/i)?.[1];
+    if (apiKey) {
+      fetch(`https://api.helius.xyz/v0/webhooks/${config.balanceMonitorWebhookId}?api-key=${apiKey}`, { method: "DELETE" })
+        .catch(() => {});
+    }
+    config.balanceMonitorWebhookId = undefined;
+    saveConfig(config);
+  }
+
+  createBalanceMonitor(
+    walletWatcher.registerEventHandler,
+    () => config.balanceMonitors ?? [],
+    async (wallet, _mint, symbol, direction, amount) => {
+      await notifyBalanceTransfer(wallet, symbol, direction, amount);
+    },
+  );
+
+  // Include balance monitor wallets in the shared webhook address list
+  async function syncBalanceAddresses(): Promise<void> {
+    const addresses = [...new Set((config.balanceMonitors ?? []).flatMap((m) => m.wallets))];
+    await walletWatcher.setExtraAddresses(addresses);
+  }
+
+  await syncBalanceAddresses();
+
   // ── Telegram ────────────────────────────────────────────────────────────────
   initTelegram({
     getState:      () => state,
@@ -444,6 +478,54 @@ async function main(): Promise<void> {
       config.watchedWalletWebhookId = webhookId ?? undefined;
       saveConfig(config);
     },
+
+    getBalanceMonitors: () => config.balanceMonitors ?? [],
+
+    addBalanceMonitor: async (mint, symbol, wallets) => {
+      if ((config.balanceMonitors ?? []).find((m) => m.mint === mint))
+        return `⚠️ A monitor for ${symbol} already exists. Use it to add more wallets.`;
+      const id = config.nextMonitorId!++;
+      config.balanceMonitors = [...(config.balanceMonitors ?? []), { id, mint, symbol, wallets }];
+      saveConfig(config);
+      await syncBalanceAddresses();
+      return `✅ Monitor created for *${symbol}* — watching ${wallets.length} wallet(s).`;
+    },
+
+    removeBalanceMonitor: async (id) => {
+      const idx = (config.balanceMonitors ?? []).findIndex((m) => m.id === id);
+      if (idx === -1) return `Monitor not found.`;
+      const symbol = config.balanceMonitors![idx].symbol;
+      config.balanceMonitors!.splice(idx, 1);
+      saveConfig(config);
+      await syncBalanceAddresses();
+      return `✅ Monitor for *${symbol}* removed.`;
+    },
+
+    addWalletToMonitor: async (id, wallet) => {
+      const monitor = (config.balanceMonitors ?? []).find((m) => m.id === id);
+      if (!monitor) return `Monitor not found.`;
+      if (monitor.wallets.includes(wallet))
+        return `⚠️ That wallet is already in this monitor.`;
+      monitor.wallets.push(wallet);
+      saveConfig(config);
+      await syncBalanceAddresses();
+      return `✅ Wallet added to *${monitor.symbol}* monitor.`;
+    },
+
+    removeWalletFromMonitor: async (id, walletIdx) => {
+      const monitor = (config.balanceMonitors ?? []).find((m) => m.id === id);
+      if (!monitor || walletIdx < 0 || walletIdx >= monitor.wallets.length) return `Not found.`;
+      monitor.wallets.splice(walletIdx, 1);
+      saveConfig(config);
+      await syncBalanceAddresses();
+      return `✅ Wallet removed.`;
+    },
+
+    getWebhookSlotCount: () => ({
+      used: (config.watchedWallet ? 1 : 0) +
+            ((config.balanceMonitors ?? []).some((m) => m.wallets.length > 0) ? 1 : 0),
+      total: 10,
+    }),
   });
 
   await notifyStartup(
