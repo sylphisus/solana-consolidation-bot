@@ -742,13 +742,18 @@ function startSettings(ctx: Context, showAll: boolean): void {
   }
   wizardState.set(ctx.chat!.id, { flow: "settings", step: "await_token" });
 
-  const PAGE = 5;
-  const hasMore = tokens.length > PAGE;
-  const visible = (!showAll && hasMore) ? tokens.slice(-PAGE) : tokens;
-  // visible tokens are a slice of the full list — compute their original indices
-  const offset = tokens.length - visible.length;
+  // Sort by m5 volume descending so highest-activity tokens appear first
+  const stateMap = callbacks.getState().tokens;
+  const sorted = [...tokens].sort((a, b) =>
+    (stateMap.get(b.mint)?.volumeM5 ?? 0) - (stateMap.get(a.mint)?.volumeM5 ?? 0)
+  );
 
-  const rows = visible.map((t, vi) => [Markup.button.callback(t.symbol, `wiz:cfg_token:${offset + vi}`)]);
+  const PAGE = 5;
+  const hasMore = sorted.length > PAGE;
+  const visible = (!showAll && hasMore) ? sorted.slice(0, PAGE) : sorted;
+
+  // Button callbacks use the original index in the config token list
+  const rows = visible.map((t) => [Markup.button.callback(t.symbol, `wiz:cfg_token:${tokens.indexOf(t)}`)]);
   if (hasMore && !showAll) {
     rows.push([Markup.button.callback("▼ Show all tokens", "cmd:settings_all")]);
   }

@@ -62,6 +62,7 @@ export interface TokenState {
   decimals: number;                // fetched from chain automatically
   currentMarketCap: number | null;
   currentPrice: number | null;
+  volumeM5: number | null;
   lastUpdated: number | null;
   yLevels: YLevel[];               // dynamic grid — empty until first mcap reading
   anchorMcap: number | null;       // the mcap we used to build the grid
@@ -87,6 +88,7 @@ export interface MarketCapUpdate {
   mint: string;
   marketCap: number;
   price: number;
+  volumeM5: number;
   timestamp: number;
 }
 

@@ -74,7 +74,7 @@ function saveConfig(config: BotConfig): void {
 function makeTokenState(mint: string, symbol: string): TokenState {
   return {
     mint, symbol, decimals: 0,
-    currentMarketCap: null, currentPrice: null,
+    currentMarketCap: null, currentPrice: null, volumeM5: null,
     lastUpdated: null, yLevels: [], anchorMcap: null,
     buyMcap: null,
     sold: false, balance: 0n,
@@ -139,6 +139,7 @@ async function watchToken(
     if (!ts2 || !tc2 || ts2.sold) return;
 
     ts2.currentPrice    = update.price;
+    ts2.volumeM5        = update.volumeM5;
 
     // If this token was previously marked stale, it has recovered
     if (staleTokens.has(update.mint)) {

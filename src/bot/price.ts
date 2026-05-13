@@ -92,12 +92,13 @@ async function runBatch(): Promise<void> {
 
       const marketCap = Number(pair.marketCap ?? pair.fdv ?? 0);
       const price     = parseFloat(pair.priceUsd ?? "0");
+      const volumeM5  = Number(pair.volume?.m5 ?? 0);
       if (!marketCap || isNaN(price)) {
         logger.warn(`[${entry.symbol}] DexScreener returned 0 market cap — pair: ${pair.dexId ?? "unknown"}, liq: $${pair.liquidity?.usd ?? 0}`);
         continue;
       }
 
-      entry.callback({ mint, marketCap, price, timestamp: now });
+      entry.callback({ mint, marketCap, price, volumeM5, timestamp: now });
       logger.debug(`[${entry.symbol}] mcap: ${fmtMc(marketCap)} price: $${price} dex: ${pair.dexId} pair: ${pair.pairAddress?.slice(0, 8)}`);
     }
   } catch (err) {
