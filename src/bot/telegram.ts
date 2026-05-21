@@ -1229,18 +1229,22 @@ export async function notifyInvalidation(
 export async function notifyNewBond(
   mint: string, name: string, symbol: string,
   marketCap: number, volumeH1: number, ageMins: number,
+  tier: number,
   imageUri?: string
 ): Promise<void> {
   if (!tg || !authorizedChatId) return;
   const ageStr = ageMins < 1 ? "<1 min" : `${Math.round(ageMins)} min`;
+  const tierEmojis = ["🔗", "🔥", "🔥🔥", "🚀"];
+  const emoji = tierEmojis[tier - 1] ?? "🔗";
+  const tierTag = tier > 1 ? ` · T${tier}` : "";
   const caption =
-    `🔗 *New Bond — ${name} (${symbol})*\n\n` +
+    `${emoji} *Bond${tierTag} — ${name} (${symbol})*\n\n` +
     `Mcap: \`${fmtMc(marketCap)}\`\n` +
-    `Volume: \`${fmtMc(volumeH1)}\` in ${ageStr} 🚀\n` +
+    `Volume: \`${fmtMc(volumeH1)}\` in ${ageStr}\n` +
     `\n[pump.fun](https://pump.fun/${mint})  •  [DexScreener](https://dexscreener.com/solana/${mint})`;
 
   try {
-    if (imageUri) {
+    if (imageUri && tier === 1) {
       await tg.telegram.sendPhoto(authorizedChatId, imageUri, {
         caption,
         parse_mode: "Markdown",

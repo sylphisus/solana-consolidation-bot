@@ -13,6 +13,7 @@ export interface BondEvent {
   volumeH1: number;
   ageMins: number;
   imageUri?: string;
+  tier: number; // 1–4
 }
 
 export type BondNotifyFn = (event: BondEvent) => Promise<void>;
@@ -33,6 +34,9 @@ const LAMBDA         = Math.LN2 / HALF_LIFE_MINS;                           // �
 const VOLUME_AT_45   = 100_000;
 const VOLUME_TARGET  = VOLUME_AT_45 / (1 - Math.exp(-LAMBDA * 45));         // ≈ $104,600
 
+/** Volume multipliers for each ping tier (baseline, +30%, +60%, +90%) */
+const TIER_MULTIPLIERS = [1.0, 1.3, 1.6, 1.9];
+
 /** Stop tracking a token after this many minutes without hitting the line */
 const MAX_TRACK_MINS = 60;
 
@@ -47,6 +51,8 @@ interface PendingBond {
   lastM5: number | null;         // previous volume.m5 reading; null = not yet polled
   windowStartedAt: number | null;// when we detected a clean m5 window boundary; null = not yet aligned
   h1AtWindowStart: number | null;// volume.h1 snapshot at alignment; delta gives true volume since alignment
+  tierReached: number;           // how many tier pings have been sent (0–4)
+  cachedImageUri?: string;       // fetched on tier 1, reused for later tiers
 }
 
 let bondNotify: BondNotifyFn | null = null;
@@ -115,7 +121,7 @@ function connect(): void {
 
       const platform = event.txType ?? event.platform ?? (feesSol === null || feesSol === 0 ? "letsbonk?" : "pumpfun");
       logger.info("Bond monitor: migration queued for volume tracking", { mint: event.mint, platform });
-      pendingBonds.set(event.mint, { bondedAt: Date.now(), rawEvent: event, lastM5: null, windowStartedAt: null, h1AtWindowStart: null });
+      pendingBonds.set(event.mint, { bondedAt: Date.now(), rawEvent: event, lastM5: null, windowStartedAt: null, h1AtWindowStart: null, tierReached: 0 });
     } catch (err) {
       logger.warn("PumpFun bond event parse error", { error: String(err) });
     }
@@ -209,10 +215,14 @@ async function pollPendingBonds(): Promise<void> {
         volumeSinceAlignment, thresholdH1: thresholdH1.toFixed(0),
       });
 
-      if (volumeM5 >= thresholdM5 && volumeSinceAlignment >= thresholdH1) {
-        pendingBonds.delete(mint);
+      for (let tier = bond.tierReached; tier < TIER_MULTIPLIERS.length; tier++) {
+        const mult = TIER_MULTIPLIERS[tier];
+        if (volumeM5 < thresholdM5 * mult || volumeSinceAlignment < thresholdH1 * mult) break;
 
-        const imageUri = await getOnChainImage(mint);
+        bond.tierReached = tier + 1;
+
+        if (tier === 0) bond.cachedImageUri = await getOnChainImage(mint);
+
         const event: BondEvent = {
           mint,
           name:      pair.baseToken?.name   ?? bond.rawEvent.name   ?? "Unknown",
@@ -220,11 +230,14 @@ async function pollPendingBonds(): Promise<void> {
           marketCap: pair.marketCap         ?? 0,
           volumeH1,
           ageMins,
-          imageUri,
+          imageUri:  bond.cachedImageUri,
+          tier:      tier + 1,
         };
 
         if (bondNotify) await bondNotify(event);
       }
+
+      if (bond.tierReached >= TIER_MULTIPLIERS.length) pendingBonds.delete(mint);
     }
   } catch (err) {
     logger.warn("PumpFun volume poll error", { error: String(err) });

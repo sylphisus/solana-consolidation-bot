@@ -454,7 +454,7 @@ async function main(): Promise<void> {
           await notifyNewBond(
             event.mint, event.name, event.symbol,
             event.marketCap, event.volumeH1, event.ageMins,
-            event.imageUri
+            event.tier, event.imageUri
           );
         }, 1.0);
       } else {
@@ -553,7 +553,7 @@ async function main(): Promise<void> {
     await notifyNewBond(
       event.mint, event.name, event.symbol,
       event.marketCap, event.volumeH1, event.ageMins,
-      event.imageUri
+      event.tier, event.imageUri
     );
   }, 0.3);
 
