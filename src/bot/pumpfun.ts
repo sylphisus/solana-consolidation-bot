@@ -35,7 +35,7 @@ const VOLUME_AT_45   = 100_000;
 const VOLUME_TARGET  = VOLUME_AT_45 / (1 - Math.exp(-LAMBDA * 45));         // ≈ $104,600
 
 /** Volume multipliers for each ping tier (baseline, +30%, +60%, +90%) */
-const TIER_MULTIPLIERS = [1.0, 1.3, 1.6, 1.9];
+const TIER_MULTIPLIERS = [1.0, 1.5, 2.0, 3.0];
 
 /** Stop tracking a token after this many minutes without hitting the line */
 const MAX_TRACK_MINS = 60;
