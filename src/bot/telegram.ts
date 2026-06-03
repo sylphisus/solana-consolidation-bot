@@ -46,7 +46,6 @@ export interface TelegramCallbacks {
 // ─── Wizard State ─────────────────────────────────────────────────────────────
 
 type WizardStep =
-  | { flow: "add_token";    step: "await_avg_price"; mint: string; symbol: string; marketCap: number }
   | { flow: "remove_token"; step: "await_pick" }
   | { flow: "settings";     step: "await_token" }
   | { flow: "settings";     step: "await_field";   mint: string; symbol: string }
@@ -603,13 +602,13 @@ async function handleAutoAddCA(ctx: Context, mint: string): Promise<void> {
   ctx.reply("🔍 Looking up token on DexScreener...");
   try {
     const { symbol, marketCap } = await fetchTokenInfo(mint);
-    wizardState.set(chatId, { flow: "add_token", step: "await_avg_price", mint, symbol, marketCap });
+    const result = await callbacks.addToken(mint, symbol, marketCap);
     ctx.reply(
-      `✅ Found *${symbol}*\n\n` +
-      `Current mcap: *${fmtMc(marketCap)}*\n\n` +
-      `What was your *average buy mcap*? _(e.g. \`25k\`, \`1.5m\`, \`45m\`)_\n\n/cancel to go back`,
+      result + `\n\nGrid floor set at current mcap: *${fmtMc(marketCap)}*`,
       { parse_mode: "Markdown" }
     );
+    wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+    showSettingsForToken(ctx, mint, symbol);
   } catch {
     ctx.reply(
       `❌ Couldn't find that token on DexScreener.\n\n` +
@@ -938,26 +937,6 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
 async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void> {
   const chatId = ctx.chat!.id;
   const text = ((ctx.message as any)?.text ?? "").trim();
-
-  // ── ADD TOKEN ─────────────────────────────────────────────────────────────
-  if (wizard.flow === "add_token") {
-    if (wizard.step === "await_avg_price") {
-      const { mint, symbol } = wizard;
-      const avgBuyMcap = parseMcap(text);
-
-      if (avgBuyMcap === null || avgBuyMcap <= 0) {
-        ctx.reply("❌ Invalid value. Examples: `25k`, `1.5m`, `45000000`.\n\n/cancel to go back", { parse_mode: "Markdown" });
-        return;
-      }
-
-      wizardState.delete(chatId);
-      const result = await callbacks!.addToken(mint, symbol, avgBuyMcap);
-      ctx.reply(result + `\n\nGrid floor set at avg buy mcap: *${fmtMc(avgBuyMcap)}*`, { parse_mode: "Markdown" });
-      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
-      showSettingsForToken(ctx, mint, symbol);
-      return;
-    }
-  }
 
   // ── WATCH WALLET ──────────────────────────────────────────────────────────
   if (wizard.flow === "watch_wallet" && wizard.step === "await_address") {
