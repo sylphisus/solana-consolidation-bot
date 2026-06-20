@@ -793,6 +793,7 @@ function showSettingsForToken(ctx: Context, mint: string, symbol: string, page: 
         [Markup.button.callback("💵 Avg Buy Mcap",   "wiz:field:buyMcap")],
         [Markup.button.callback("📏 Level Spacing",  "wiz:field:levelSpacingUsd")],
         ...(tc.priceTracking ? [
+          [Markup.button.callback("🔻 ATL Alert Spacing", "wiz:field:atlAlertSpacingUsd")],
           [Markup.button.callback("🔄 Reset ATL", "wiz:reset_atl")],
         ] : []),
         [Markup.button.callback("▼ More settings",  "wiz:settings_p2")],
@@ -807,7 +808,6 @@ function showSettingsForToken(ctx: Context, mint: string, symbol: string, page: 
         [Markup.button.callback("📤 Sell Amount %",    "wiz:field:sellPct")],
         [Markup.button.callback(tc.priceTracking ? "📡 Price Tracking: ON  (tap to disable)" : "📡 Price Tracking: OFF  (tap to enable)", "wiz:field:priceTracking")],
         ...(tc.priceTracking ? [
-          [Markup.button.callback("🔻 ATL Alert Spacing", "wiz:field:atlAlertSpacingUsd")],
           [Markup.button.callback("🚀 Upside Alert %",    "wiz:field:upsideAlertPct")],
         ] : []),
         [Markup.button.callback("▲ Back",            "wiz:settings_p1")],
