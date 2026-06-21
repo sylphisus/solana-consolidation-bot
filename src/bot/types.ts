@@ -17,6 +17,12 @@ export interface TokenConfig {
   priceTracking: boolean;        // if true, sends ATL and upside alerts via Telegram
   atlAlertSpacingUsd: number;    // fire an ATL alert each time ATL drops by this much (default $10k)
   upsideAlertPct: number;        // fire an upside alert each time mcap rises this % from last alert (default 30)
+  // Range mode — alternative to consolidation detection (mutually exclusive)
+  rangeMode: boolean;            // if true, range-dwell detection replaces the touch grid
+  rangePct: number;              // % above the anchor mcap where the band CENTER sits
+  rangeSizeUsd: number;          // total width of the band in USD (split half above/below the center)
+  rangeDurationSecs: number;     // continuous seconds mcap must stay in the band to trigger a sell
+  rangeAnchorMcap: number | null; // mcap snapshot taken when range mode was enabled
   notes?: string;
   autoAdded?: boolean; // true if added automatically by the wallet watcher (not manually)
 }
@@ -73,6 +79,7 @@ export interface TokenState {
   lastUpsideAlertMcap: number | null; // mcap baseline for the next upside alert
   balance: bigint;
   lastBalanceCheck: number | null;
+  rangeDwellStart: number | null;  // unix ms when mcap continuously entered the range band (range mode)
 }
 
 export interface BotState {

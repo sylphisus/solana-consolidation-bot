@@ -2,7 +2,7 @@ import { Telegraf, Context, Markup } from "telegraf";
 import { BotState, TokenConfig, TradeRecord, BalanceMonitor } from "./types";
 import { toUiAmount } from "./wallet";
 import { fetchTokenInfo } from "./price";
-import { getHottestLevels, fmtMc } from "./consolidation";
+import { getHottestLevels, fmtMc, rangeBand } from "./consolidation";
 import { logger } from "./logger";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -55,7 +55,7 @@ type WizardStep =
   | { flow: "balance_monitor"; step: "await_wallets"; mint: string; symbol: string }
   | { flow: "balance_monitor_add_wallet"; step: "await_wallet"; monitorId: number };
 
-type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "sellPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap";
+type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "sellPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap" | "rangePct" | "rangeSizeUsd" | "rangeDurationSecs";
 
 const wizardState = new Map<number, WizardStep>();
 
@@ -766,19 +766,56 @@ function startSettings(ctx: Context, showAll: boolean): void {
 
 // ─── Settings Field Display ───────────────────────────────────────────────────
 
+function fmtDuration(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  const m = secs / 60;
+  return Number.isInteger(m) ? `${m}m` : `${m.toFixed(1)}m`;
+}
+
 function showSettingsForToken(ctx: Context, mint: string, symbol: string, page: 1 | 2 = 1): void {
   const tc = callbacks!.getConfig(mint)!;
   const ts = callbacks!.getState().tokens.get(mint);
+
+  // Detection params — depend on which sell mode is active
+  const band = rangeBand(tc);
+  const detectionLines = tc.rangeMode
+    ? `• Sell mode: \`Range\`\n` +
+      `  ↳ Band: \`+${tc.rangePct}%\` center, \`${fmtMc(tc.rangeSizeUsd)}\` wide` +
+      (band ? ` → \`${fmtMc(band.lo)}–${fmtMc(band.hi)}\`` : "") + `\n` +
+      `  ↳ Hold time: \`${fmtDuration(tc.rangeDurationSecs)}\`\n` +
+      `  ↳ Anchor mcap: \`${tc.rangeAnchorMcap != null ? fmtMc(tc.rangeAnchorMcap) : "not set"}\`\n`
+    : `• Sell mode: \`Consolidation\`\n` +
+      `• Level spacing: \`${fmtMc(tc.levelSpacingUsd)}\`\n` +
+      `• Touch threshold: \`${tc.touchThreshold}\`\n` +
+      `• Hysteresis: \`${tc.hysteresisUsd != null ? "$" + fmtMc(tc.hysteresisUsd) : "±" + tc.hysteresisPct + "%"}\`\n` +
+      `• Time-gate: \`${tc.minSecsBetweenTouches}s\`\n` +
+      `• Invalidation: \`+${tc.invalidationPct}%\`\n`;
+
+  // Page 2 detection buttons — depend on sell mode
+  const modeToggleBtn = Markup.button.callback(
+    tc.rangeMode ? "🎯 Sell Mode: Range  (tap → Consolidation)" : "🎯 Sell Mode: Consolidation  (tap → Range)",
+    "wiz:field:rangeMode"
+  );
+  const detectionButtons = tc.rangeMode ? [
+    [modeToggleBtn],
+    [Markup.button.callback("📈 Range % Above",    "wiz:field:rangePct")],
+    [Markup.button.callback("📐 Range Size",       "wiz:field:rangeSizeUsd")],
+    [Markup.button.callback("⏳ Hold Time (secs)", "wiz:field:rangeDurationSecs")],
+  ] : [
+    [modeToggleBtn],
+    [Markup.button.callback("👆 Touch Threshold",  "wiz:field:touchThreshold")],
+    [Markup.button.callback("↔️ Hysteresis %",     "wiz:field:hysteresisPct")],
+    [Markup.button.callback("↔️ Hysteresis $",     "wiz:field:hysteresisUsd")],
+    [Markup.button.callback("⏱ Time-gate (secs)", "wiz:field:minSecsBetweenTouches")],
+    [Markup.button.callback("🚫 Invalidation %",   "wiz:field:invalidationPct")],
+  ];
+
   ctx.reply(
     `⚙️ *Settings for ${symbol}*\n\n` +
     `Current values:\n` +
     `• Avg buy mcap: \`${tc.buyMcap != null ? fmtMc(tc.buyMcap) : "not set"}\`\n` +
     `• ATL: \`${ts?.allTimeLow != null ? fmtMc(ts.allTimeLow) : "not set"}\`\n` +
-    `• Level spacing: \`${fmtMc(tc.levelSpacingUsd)}\`\n` +
-    `• Touch threshold: \`${tc.touchThreshold}\`\n` +
-    `• Hysteresis: \`${tc.hysteresisUsd != null ? "$" + fmtMc(tc.hysteresisUsd) : "±" + tc.hysteresisPct + "%"}\`\n` +
-    `• Time-gate: \`${tc.minSecsBetweenTouches}s\`\n` +
-    `• Invalidation: \`+${tc.invalidationPct}%\`\n` +
+    detectionLines +
     `• Sell amount: \`${tc.sellPct ?? 100}%\` of balance\n` +
     `• Min profit to sell: \`${tc.minProfitPct != null ? "+" + tc.minProfitPct + "%" : "disabled"}\`\n` +
     `• Price tracking: \`${tc.priceTracking ? "ON" : "OFF"}\`\n` +
@@ -799,11 +836,7 @@ function showSettingsForToken(ctx: Context, mint: string, symbol: string, page: 
         [Markup.button.callback("▼ More settings",  "wiz:settings_p2")],
         [Markup.button.callback("« Back to menu",   "cmd:home")],
       ] : [
-        [Markup.button.callback("👆 Touch Threshold",  "wiz:field:touchThreshold")],
-        [Markup.button.callback("↔️ Hysteresis %",     "wiz:field:hysteresisPct")],
-        [Markup.button.callback("↔️ Hysteresis $",     "wiz:field:hysteresisUsd")],
-        [Markup.button.callback("⏱ Time-gate (secs)", "wiz:field:minSecsBetweenTouches")],
-        [Markup.button.callback("🚫 Invalidation %",   "wiz:field:invalidationPct")],
+        ...detectionButtons,
         [Markup.button.callback("💰 Min Profit %",     "wiz:field:minProfitPct")],
         [Markup.button.callback("📤 Sell Amount %",    "wiz:field:sellPct")],
         [Markup.button.callback(tc.priceTracking ? "📡 Price Tracking: ON  (tap to disable)" : "📡 Price Tracking: OFF  (tap to enable)", "wiz:field:priceTracking")],
@@ -876,6 +909,30 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
       return;
     }
 
+    // rangeMode is a boolean toggle — handle immediately, snapshotting the anchor on enable
+    if (rawField === "rangeMode") {
+      const { mint, symbol } = wizard;
+      const tc = callbacks!.getConfig(mint)!;
+      const newVal = !tc.rangeMode;
+      callbacks!.updateSettings(mint, { rangeMode: newVal });
+      if (newVal) {
+        const band = rangeBand(callbacks!.getConfig(mint)!);
+        ctx.reply(
+          `🎯 *Range mode enabled* for *${symbol}*.\n\n` +
+          (band
+            ? `Band: \`+${tc.rangePct}%\` center, \`${fmtMc(tc.rangeSizeUsd)}\` wide → \`${fmtMc(band.lo)}–${fmtMc(band.hi)}\`\n` +
+              `Hold time: \`${fmtDuration(tc.rangeDurationSecs)}\``
+            : `Anchor mcap will be captured on the next price tick.`),
+          { parse_mode: "Markdown" }
+        );
+      } else {
+        ctx.reply(`🎯 Range mode *disabled* for *${symbol}* — back to consolidation detection.`, { parse_mode: "Markdown" });
+      }
+      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      showSettingsForToken(ctx, mint, symbol, 2);
+      return;
+    }
+
     const field = rawField as SettingsField;
     wizardState.set(chatId, { flow: "settings", step: "await_value", mint: wizard.mint, symbol: wizard.symbol, field });
 
@@ -925,6 +982,18 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
         `🚀 *Upside Alert %*\n\nSends an alert every time the market cap rises this % from the last alert baseline.\n\n` +
         `Example: \`30\` = alert fires every time mcap gains another 30%.\n` +
         `Default: \`30\``,
+      rangePct:
+        `📈 *Range % Above*\n\nHow far above the anchor mcap (captured when range mode was enabled) the CENTER of the band sits.\n\n` +
+        `Example: \`20\` = band centered 20% above the anchor.\n` +
+        `_Changing this restarts the hold timer._`,
+      rangeSizeUsd:
+        `📐 *Range Size*\n\nHow wide the band is in USD (split half above and half below the center).\n\n` +
+        `Use shorthand: \`10k\`, \`50k\`, \`1m\` etc.\n` +
+        `Example: \`10k\` = band spans $10K total (±$5K around the center).\n` +
+        `_Changing this restarts the hold timer._`,
+      rangeDurationSecs:
+        `⏳ *Hold Time*\n\nHow many continuous seconds the market cap must stay inside the band to trigger a sell.\n\n` +
+        `Example: \`300\` = 5 minutes. If mcap leaves the band, the timer resets.`,
     };
 
     ctx.reply(prompts[field], { parse_mode: "Markdown" });
@@ -1017,7 +1086,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
     const { mint, symbol, field } = wizard;
     let value: number | null = null;
 
-    if (field === "levelSpacingUsd" || field === "hysteresisUsd" || field === "atlAlertSpacingUsd" || field === "buyMcap") {
+    if (field === "levelSpacingUsd" || field === "hysteresisUsd" || field === "atlAlertSpacingUsd" || field === "buyMcap" || field === "rangeSizeUsd") {
       value = parseMcap(text);
       if (value === null || value < 0) {
         ctx.reply("❌ Invalid amount. Examples: `500k`, `1m`, `2500000`, or `0` to clear", { parse_mode: "Markdown" });
@@ -1025,6 +1094,11 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       }
       // 0 means "clear" for nullable fields
       if ((field === "hysteresisUsd" || field === "buyMcap") && value === 0) value = null as any;
+      // range size must be a positive width
+      if (field === "rangeSizeUsd" && value === 0) {
+        ctx.reply("❌ Range size must be greater than 0. Examples: `10k`, `50k`, `1m`");
+        return;
+      }
     } else if (field === "minProfitPct") {
       value = parseFloat(text);
       if (isNaN(value) || value < 0) {
@@ -1060,10 +1134,14 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       atlAlertSpacingUsd: "ATL alert spacing",
       upsideAlertPct: "Upside alert %",
       buyMcap: "Avg buy mcap",
+      rangePct: "Range % above",
+      rangeSizeUsd: "Range size",
+      rangeDurationSecs: "Hold time",
     };
 
+    const usdField = field === "levelSpacingUsd" || field === "rangeSizeUsd";
     ctx.reply(
-      `${result}\n\n*${fieldNames[field]}* set to \`${field === "levelSpacingUsd" ? fmtMc(value!) : value ?? "cleared"}\``,
+      `${result}\n\n*${fieldNames[field]}* set to \`${usdField ? fmtMc(value!) : value ?? "cleared"}\``,
       { parse_mode: "Markdown" }
     );
     wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
@@ -1122,6 +1200,20 @@ export async function notifySellTriggered(
     `🔴 *SELL TRIGGERED — ${symbol}*\n\n` +
     `Consolidation detected on line \`${fmtMc(levelMcap)}\`\n` +
     `Touches: \`${touchCount}\`  |  Mcap: \`${fmtMc(currentMcap)}\`\n` +
+    `Amount: \`${amount.toLocaleString()} ${symbol}\` _(${sellPct}% of balance)_\n\n` +
+    `⏳ Executing swap on Jupiter...`
+  );
+}
+
+export async function notifyRangeSellTriggered(
+  mint: string, symbol: string, amount: number, centerMcap: number,
+  dwellSecs: number, currentMcap: number, sellPct: number = 100
+): Promise<void> {
+  lastNotifiedMint = mint;
+  await safeSend(
+    `🔴 *SELL TRIGGERED — ${symbol}*\n\n` +
+    `Range held around \`${fmtMc(centerMcap)}\` for \`${fmtDuration(Math.round(dwellSecs))}\`\n` +
+    `Mcap: \`${fmtMc(currentMcap)}\`\n` +
     `Amount: \`${amount.toLocaleString()} ${symbol}\` _(${sellPct}% of balance)_\n\n` +
     `⏳ Executing swap on Jupiter...`
   );

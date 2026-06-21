@@ -38,6 +38,8 @@ export interface ConsolidationEvent {
   touchCount: number;
   touchThreshold: number;
   currentMarketCap: number;
+  isRange?: boolean;   // true when fired by range mode rather than the touch grid
+  dwellSecs?: number;  // seconds held in the band (range mode only)
 }
 
 const GRID_RADIUS = 50;
@@ -70,6 +72,9 @@ export function processMarketCap(
   const prevMarketCap = state.currentMarketCap;
   state.currentMarketCap = newMarketCap;
   state.lastUpdated = Date.now();
+
+  // Range mode replaces the touch-grid detection entirely
+  if (config.rangeMode) return processRange(state, config, newMarketCap);
 
   // First reading — build the grid, nothing to compare against yet
   if (state.yLevels.length === 0 || prevMarketCap === null) {
@@ -176,6 +181,72 @@ export function processMarketCap(
     }
   }
 
+  return null;
+}
+
+// ─── Range Mode ───────────────────────────────────────────────────────────────
+//
+// Sells when the market cap stays inside a fixed band for a continuous duration.
+// The band is centred rangePct% above the anchor mcap (captured when range mode
+// was enabled) and spans rangeSizeUsd wide (half above, half below the centre).
+// If the mcap leaves the band the dwell timer resets to zero.
+
+export function rangeBand(config: TokenConfig): { lo: number; hi: number; center: number } | null {
+  if (config.rangeAnchorMcap == null) return null;
+  const center = config.rangeAnchorMcap * (1 + config.rangePct / 100);
+  const half = config.rangeSizeUsd / 2;
+  return { lo: center - half, hi: center + half, center };
+}
+
+function processRange(
+  state: TokenState,
+  config: TokenConfig,
+  mcap: number
+): ConsolidationEvent | null {
+  const band = rangeBand(config);
+  if (!band) return null; // anchor not yet captured — index.ts captures + persists it
+
+  const now = Date.now();
+  const inBand = mcap >= band.lo && mcap <= band.hi;
+
+  if (!inBand) {
+    if (state.rangeDwellStart !== null) {
+      logger.info(
+        `[${state.symbol}] Range dwell reset — mcap ${fmtMc(mcap)} left band ` +
+        `${fmtMc(band.lo)}–${fmtMc(band.hi)}`
+      );
+      state.rangeDwellStart = null;
+    }
+    return null;
+  }
+
+  if (state.rangeDwellStart === null) {
+    state.rangeDwellStart = now;
+    logger.info(
+      `[${state.symbol}] Range dwell started — mcap ${fmtMc(mcap)} entered band ` +
+      `${fmtMc(band.lo)}–${fmtMc(band.hi)} (need ${config.rangeDurationSecs}s)`
+    );
+    return null;
+  }
+
+  const dwellSecs = (now - state.rangeDwellStart) / 1000;
+  if (dwellSecs >= config.rangeDurationSecs) {
+    logger.info(
+      `[${state.symbol}] 🎯 RANGE — held ${dwellSecs.toFixed(0)}s in band ` +
+      `${fmtMc(band.lo)}–${fmtMc(band.hi)} — sell triggered!`,
+      { mcap: fmtMc(mcap) }
+    );
+    return {
+      mint: state.mint,
+      symbol: state.symbol,
+      triggerLevel: band.center,
+      touchCount: 0,
+      touchThreshold: 0,
+      currentMarketCap: mcap,
+      isRange: true,
+      dwellSecs,
+    };
+  }
   return null;
 }
 

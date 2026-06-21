@@ -11,6 +11,7 @@ import {
   notifyStartup,
   notifyTouchDetected,
   notifySellTriggered,
+  notifyRangeSellTriggered,
   notifyTradeResult,
   notifyLowSol,
   notifyInvalidation,
@@ -44,6 +45,11 @@ function loadConfig(): BotConfig {
     t.priceTracking       ??= true;
     t.atlAlertSpacingUsd  ??= 10_000;
     t.upsideAlertPct      ??= 30;
+    t.rangeMode           ??= false;
+    t.rangePct            ??= 20;
+    t.rangeSizeUsd        ??= 10_000;
+    t.rangeDurationSecs   ??= 300;
+    t.rangeAnchorMcap     ??= null;
     // Assign IDs to tokens that pre-date this feature
     if ((t as any).id == null) {
       t.id = cfg.nextTokenId++;
@@ -80,6 +86,7 @@ function makeTokenState(mint: string, symbol: string): TokenState {
     sold: false, balance: 0n,
     allTimeLow: null, lastAtlAlertMcap: null, lastUpsideAlertMcap: null,
     lastBalanceCheck: null,
+    rangeDwellStart: null,
   };
 }
 
@@ -140,6 +147,14 @@ async function watchToken(
 
     ts2.currentPrice    = update.price;
     ts2.volumeM5        = update.volumeM5;
+
+    // Range mode: if the anchor wasn't captured at enable time (no price was known
+    // yet), freeze it now off the first reading and persist so it survives restarts.
+    if (tc2.rangeMode && tc2.rangeAnchorMcap == null) {
+      tc2.rangeAnchorMcap = update.marketCap;
+      saveConfig(config);
+      logger.info(`[${ts2.symbol}] Range anchor captured: ${fmtMc(update.marketCap)}`);
+    }
 
     // If this token was previously marked stale, it has recovered
     if (staleTokens.has(update.mint)) {
@@ -225,8 +240,13 @@ async function watchToken(
       const sellPct    = tc2.sellPct ?? 100;
       const sellAmount = ts2.balance * BigInt(Math.min(sellPct, 100)) / 100n;
 
-      await notifySellTriggered(event.mint, event.symbol, toUiAmount(sellAmount, ts2.decimals),
-        event.triggerLevel, event.touchCount, event.currentMarketCap, sellPct);
+      if (event.isRange) {
+        await notifyRangeSellTriggered(event.mint, event.symbol, toUiAmount(sellAmount, ts2.decimals),
+          event.triggerLevel, event.dwellSecs ?? 0, event.currentMarketCap, sellPct);
+      } else {
+        await notifySellTriggered(event.mint, event.symbol, toUiAmount(sellAmount, ts2.decimals),
+          event.triggerLevel, event.touchCount, event.currentMarketCap, sellPct);
+      }
 
       sellInProgress.add(event.mint);
 
@@ -283,6 +303,11 @@ async function main(): Promise<void> {
           priceTracking: true,
           atlAlertSpacingUsd: 10_000,
           upsideAlertPct: 30,
+          rangeMode: false,
+          rangePct: 20,
+          rangeSizeUsd: 10_000,
+          rangeDurationSecs: 300,
+          rangeAnchorMcap: null,
           autoAdded: true,
         });
         saveConfig(config);
@@ -375,6 +400,11 @@ async function main(): Promise<void> {
         priceTracking: true,
         atlAlertSpacingUsd: 10_000,
         upsideAlertPct: 30,
+        rangeMode: false,
+        rangePct: 20,
+        rangeSizeUsd: 10_000,
+        rangeDurationSecs: 300,
+        rangeAnchorMcap: null,
       });
       saveConfig(config);
       const ts = makeTokenState(mint, symbol);
@@ -403,14 +433,22 @@ async function main(): Promise<void> {
       const tc = config.tokens.find((t) => t.mint === mint);
       if (!tc) return `Token not found.`;
       Object.assign(tc, settings);
-      saveConfig(config);
       const ts = state.tokens.get(mint);
+      // Capture the band anchor at the moment range mode is enabled
+      if (settings.rangeMode === true) {
+        tc.rangeAnchorMcap = ts?.currentMarketCap ?? null;
+      }
+      saveConfig(config);
       if (ts) {
         if (settings.buyMcap !== undefined) {
           ts.buyMcap = settings.buyMcap ?? null;
           ts.yLevels = []; ts.anchorMcap = null;
         } else if (settings.levelSpacingUsd !== undefined) {
           ts.yLevels = []; ts.anchorMcap = null;
+        }
+        // Any change to the band (mode toggle, pct, or size) restarts the dwell timer
+        if (settings.rangeMode !== undefined || settings.rangePct !== undefined || settings.rangeSizeUsd !== undefined) {
+          ts.rangeDwellStart = null;
         }
       }
       const rebuilds = settings.buyMcap !== undefined || settings.levelSpacingUsd !== undefined;
