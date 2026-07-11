@@ -309,6 +309,7 @@ async function main(): Promise<void> {
           rangeDurationSecs: 300,
           rangeAnchorMcap: null,
           autoAdded: true,
+          addedAt: Date.now(),
         });
         saveConfig(config);
         const ts = makeTokenState(mint, symbol);
@@ -326,6 +327,12 @@ async function main(): Promise<void> {
         const token = config.tokens[idx];
         if (!token.autoAdded) {
           logger.info(`Wallet watcher: ${token.symbol} was manually added — skipping auto-remove`);
+          return;
+        }
+        // Keep tokens that have been tracked for more than a day — a long-held position
+        // shouldn't be silently dropped just because the watched wallet fully sold.
+        if (token.addedAt === undefined || Date.now() - token.addedAt > 24 * 60 * 60 * 1000) {
+          logger.info(`Wallet watcher: ${token.symbol} tracked >1 day — skipping auto-remove`);
           return;
         }
         const symbol = token.symbol;

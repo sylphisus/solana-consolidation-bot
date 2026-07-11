@@ -25,6 +25,7 @@ export interface TokenConfig {
   rangeAnchorMcap: number | null; // mcap snapshot taken when range mode was enabled
   notes?: string;
   autoAdded?: boolean; // true if added automatically by the wallet watcher (not manually)
+  addedAt?: number;    // ms epoch when auto-added — used to skip auto-remove on long-held tokens
 }
 
 export interface GlobalConfig {
