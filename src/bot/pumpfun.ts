@@ -10,7 +10,7 @@ export interface BondEvent {
   name: string;
   symbol: string;
   marketCap: number;
-  volumeH1: number;
+  volumeSinceAlignment: number;
   ageMins: number;
   imageUri?: string;
   tier: number; // 1–4
@@ -37,6 +37,10 @@ const VOLUME_TARGET  = VOLUME_AT_45 / (1 - Math.exp(-LAMBDA * 45));         // �
 /** Volume multipliers for each ping tier (baseline, +30%, +60%, +90%) */
 const TIER_MULTIPLIERS = [1.0, 1.5, 2.0, 3.0];
 
+/** Require at least 1 SOL in fees, scaling to 70 SOL per $1M of tracked volume. */
+const MIN_FEES_SOL = 1;
+const FEES_SOL_PER_USD_VOLUME = 70 / 1_000_000;
+
 /** Stop tracking a token after this many minutes without hitting the line */
 const MAX_TRACK_MINS = 60;
 
@@ -51,12 +55,12 @@ interface PendingBond {
   lastM5: number | null;         // previous volume.m5 reading; null = not yet polled
   windowStartedAt: number | null;// when we detected a clean m5 window boundary; null = not yet aligned
   h1AtWindowStart: number | null;// volume.h1 snapshot at alignment; delta gives true volume since alignment
+  feesSol: number;               // migration fees used for the volume-scaled notification gate
   tierReached: number;           // how many tier pings have been sent (0–4)
   cachedImageUri?: string;       // fetched on tier 1, reused for later tiers
 }
 
 let bondNotify: BondNotifyFn | null = null;
-let minFeesSol: number = 0.3;
 let solanaConnection: Connection | null = null;
 let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
@@ -68,12 +72,10 @@ const pendingBonds = new Map<string, PendingBond>();
 
 export function startBondMonitor(
   connection: Connection,
-  onBond: BondNotifyFn,
-  minFees: number = 0.3,
+  onBond: BondNotifyFn
 ): void {
   solanaConnection = connection;
   bondNotify = onBond;
-  minFeesSol = minFees;
   enabled = true;
   connect();
   startPollLoop();
@@ -109,19 +111,19 @@ function connect(): void {
       const event = JSON.parse(raw.toString());
       if (!event.mint) return;
 
-      const feesSol: number | null =
+      const rawFees =
         event.totalFeesSol ?? event.feesInSol ?? event.fees_in_sol ?? event.totalFees ?? null;
+      const feesSol = Number(rawFees);
 
-      // Only reject tokens with explicitly positive fees below threshold.
-      // Zero or missing fees pass through — LetsBonk.fun graduations don't report SOL fees.
-      if (feesSol !== null && feesSol > 0 && feesSol < minFeesSol) {
-        logger.info(`Bond monitor: skipping ${event.symbol ?? event.mint} — fees ${feesSol} SOL < ${minFeesSol} SOL`);
+      // Missing/zero fees are not verifiable; this also excludes LetsBonk graduations.
+      if (!Number.isFinite(feesSol) || feesSol < MIN_FEES_SOL) {
+        logger.info(`Bond monitor: skipping ${event.symbol ?? event.mint} — fees unavailable or below ${MIN_FEES_SOL} SOL`);
         return;
       }
 
-      const platform = event.txType ?? event.platform ?? (feesSol === null || feesSol === 0 ? "letsbonk?" : "pumpfun");
-      logger.info("Bond monitor: migration queued for volume tracking", { mint: event.mint, platform });
-      pendingBonds.set(event.mint, { bondedAt: Date.now(), rawEvent: event, lastM5: null, windowStartedAt: null, h1AtWindowStart: null, tierReached: 0 });
+      const platform = event.txType ?? event.platform ?? "pumpfun";
+      logger.info("Bond monitor: migration queued for volume tracking", { mint: event.mint, platform, feesSol });
+      pendingBonds.set(event.mint, { bondedAt: Date.now(), rawEvent: event, lastM5: null, windowStartedAt: null, h1AtWindowStart: null, feesSol, tierReached: 0 });
     } catch (err) {
       logger.warn("PumpFun bond event parse error", { error: String(err) });
     }
@@ -219,6 +221,21 @@ async function pollPendingBonds(): Promise<void> {
         const mult = TIER_MULTIPLIERS[tier];
         if (volumeM5 < thresholdM5 * mult || volumeSinceAlignment < thresholdH1 * mult) break;
 
+        const requiredFeesSol = Math.max(
+          MIN_FEES_SOL,
+          volumeSinceAlignment * FEES_SOL_PER_USD_VOLUME,
+        );
+        if (bond.feesSol < requiredFeesSol) {
+          logger.info("PumpFun: dropped token below fee-to-volume threshold", {
+            symbol: pair.baseToken?.symbol ?? mint.slice(0, 8),
+            feesSol: bond.feesSol,
+            requiredFeesSol: requiredFeesSol.toFixed(2),
+            volumeSinceAlignment,
+          });
+          pendingBonds.delete(mint);
+          break;
+        }
+
         bond.tierReached = tier + 1;
 
         if (tier === 0) bond.cachedImageUri = await getOnChainImage(mint);
@@ -228,7 +245,7 @@ async function pollPendingBonds(): Promise<void> {
           name:      pair.baseToken?.name   ?? bond.rawEvent.name   ?? "Unknown",
           symbol:    pair.baseToken?.symbol ?? bond.rawEvent.symbol ?? "???",
           marketCap: pair.marketCap         ?? 0,
-          volumeH1,
+          volumeSinceAlignment,
           ageMins,
           imageUri:  bond.cachedImageUri,
           tier:      tier + 1,

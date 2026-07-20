@@ -498,10 +498,10 @@ async function main(): Promise<void> {
         startBondMonitor(connection, async (event) => {
           await notifyNewBond(
             event.mint, event.name, event.symbol,
-            event.marketCap, event.volumeH1, event.ageMins,
+            event.marketCap, event.volumeSinceAlignment, event.ageMins,
             event.tier, event.imageUri
           );
-        }, 1.0);
+        });
       } else {
         stopBondMonitor();
       }
@@ -597,10 +597,10 @@ async function main(): Promise<void> {
   startBondMonitor(connection, async (event) => {
     await notifyNewBond(
       event.mint, event.name, event.symbol,
-      event.marketCap, event.volumeH1, event.ageMins,
+      event.marketCap, event.volumeSinceAlignment, event.ageMins,
       event.tier, event.imageUri
     );
-  }, 0.3);
+  });
 
   logger.info(`Bot live — polling every ${POLL_INTERVAL_MS}ms via DexScreener`, {
     wallet: keypair.publicKey.toBase58(),

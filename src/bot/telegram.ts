@@ -1299,7 +1299,7 @@ export async function notifyInvalidation(
 
 export async function notifyNewBond(
   mint: string, name: string, symbol: string,
-  marketCap: number, volumeH1: number, ageMins: number,
+  marketCap: number, volumeSinceAlignment: number, ageMins: number,
   tier: number,
   imageUri?: string
 ): Promise<void> {
@@ -1311,7 +1311,7 @@ export async function notifyNewBond(
   const caption =
     `${emoji} *Bond${tierTag} — ${name} (${symbol})*\n\n` +
     `Mcap: \`${fmtMc(marketCap)}\`\n` +
-    `Volume: \`${fmtMc(volumeH1)}\` in ${ageStr}\n` +
+    `Volume: \`${fmtMc(volumeSinceAlignment)}\` in ${ageStr}\n` +
     `\n[pump.fun](https://pump.fun/${mint})  •  [DexScreener](https://dexscreener.com/solana/${mint})`;
 
   try {
