@@ -1406,7 +1406,8 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     if (!res.ok) throw new Error(`Telegram fetch HTTP ${res.status}`);
     fs.writeFileSync(inPath, Buffer.from(await res.arrayBuffer()));
 
-    await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 30_000 });
+    // Full-size 512px renders run ~45s for a dense sticker, more when the CPU is busy
+    await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 120_000 });
 
     const gif  = fs.readFileSync(outPath);
     const form = new FormData();
