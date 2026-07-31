@@ -10,10 +10,9 @@ import os from "os";
 import path from "path";
 import crypto from "crypto";
 import fs from "fs";
-import zlib from "zlib";
 
 const execFileAsync = promisify(execFile);
-const TGS_SIZE = "512x512";
+const TGS_SCRIPT = path.join(process.cwd(), "scripts", "tgs_to_webp.py");
 const INSTAGRAM_COOKIES = process.env.INSTAGRAM_COOKIES || path.join(process.cwd(), "config", "instagram_cookies.txt");
 const INSTAGRAM_URL_RE = /https?:\/\/(?:www\.)?instagram\.com\/[^\s]+/i;
 const TG_UPLOAD_LIMIT = 50 * 1024 * 1024;
@@ -1396,8 +1395,8 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
   if (!webhookUrl) { ctx.reply("❌ `DISCORD_WEBHOOK_URL` is not set in .env.", { parse_mode: "Markdown" }); return; }
 
   const tmpId  = crypto.randomBytes(8).toString("hex");
-  const inPath  = path.join(os.tmpdir(), `${tmpId}.json`);
-  const outPath = `${inPath}.gif`; // lottie2gif writes basename + .gif into its cwd
+  const inPath  = path.join(os.tmpdir(), `${tmpId}.tgs`);
+  const outPath = path.join(os.tmpdir(), `${tmpId}.webp`);
 
   try {
     const token = process.env.TELEGRAM_BOT_TOKEN!;
@@ -1405,24 +1404,22 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     const url   = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
     const res   = await fetch(url);
     if (!res.ok) throw new Error(`Telegram fetch HTTP ${res.status}`);
-    // TGS is gzipped Lottie JSON; rlottie only reads the plain JSON
-    fs.writeFileSync(inPath, zlib.gunzipSync(Buffer.from(await res.arrayBuffer())));
+    fs.writeFileSync(inPath, Buffer.from(await res.arrayBuffer()));
 
-    // TODO: rlottie's bundled GIF encoder is weak — output runs ~6x larger than the
-    // old python-lottie path (2MB vs 324KB on a 210-frame test). Re-encoding through
-    // ffmpeg, like the WebM path below, would recover most of that if size matters.
-    // cwd matters: lottie2gif writes the .gif into the working dir, not beside the input
-    await execFileAsync("lottie2gif", [inPath, TGS_SIZE], { cwd: os.tmpdir() });
+    // WebP, not GIF: GIF transparency is 1-bit, which leaves hard edges on the
+    // anti-aliased borders stickers have. WebP carries the full alpha channel.
+    // Costs ~40s a sticker — rlottie is ~7x faster but discards alpha entirely.
+    await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 120_000 });
 
-    const gif  = fs.readFileSync(outPath);
+    const webp = fs.readFileSync(outPath);
     const form = new FormData();
-    form.append("file", new Blob([gif], { type: "image/gif" }), "sticker.gif");
-    form.append("content", "animated sticker — sticker.gif");
+    form.append("file", new Blob([webp], { type: "image/webp" }), "sticker.webp");
+    form.append("content", "animated sticker — sticker.webp");
 
     const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
 
-    ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.gif`", { parse_mode: "Markdown" });
+    ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.webp`", { parse_mode: "Markdown" });
   } catch (err) {
     logger.error("TGS conversion/send failed", { error: String(err) });
     ctx.reply("❌ Failed to convert sticker. Try again.");
