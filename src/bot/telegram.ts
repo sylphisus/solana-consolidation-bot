@@ -1398,6 +1398,10 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
   const inPath  = path.join(os.tmpdir(), `${tmpId}.tgs`);
   const outPath = path.join(os.tmpdir(), `${tmpId}.webp`);
 
+  // Both fetches below throw an identical "TypeError: fetch failed" on transport
+  // errors, so track which one we're in to keep failures diagnosable
+  let stage = "download";
+
   try {
     const token = process.env.TELEGRAM_BOT_TOKEN!;
     const file  = await ctx.telegram.getFile(fileId);
@@ -1409,6 +1413,7 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     // WebP, not GIF: GIF transparency is 1-bit, which leaves hard edges on the
     // anti-aliased borders stickers have. WebP carries the full alpha channel.
     // Costs ~40s a sticker — rlottie is ~7x faster but discards alpha entirely.
+    stage = "convert";
     await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 300_000 });
 
     const webp = fs.readFileSync(outPath);
@@ -1416,13 +1421,20 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     form.append("file", new Blob([webp], { type: "image/webp" }), "sticker.webp");
     form.append("content", "animated sticker — sticker.webp");
 
+    stage = `upload (${webp.length} bytes)`;
     const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
 
     ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.webp`", { parse_mode: "Markdown" });
   } catch (err) {
-    logger.error("TGS conversion/send failed", { error: String(err) });
-    ctx.reply("❌ Failed to convert sticker. Try again.");
+    // undici buries the real transport reason (DNS, TLS, timeout) in .cause
+    const cause = (err as any)?.cause;
+    logger.error("TGS conversion/send failed", {
+      stage,
+      error: String(err),
+      cause: cause ? String(cause) : "none",
+    });
+    ctx.reply(`❌ Failed to convert sticker (${stage}). Try again.`);
   } finally {
     try { fs.unlinkSync(inPath); } catch {}
     try { fs.unlinkSync(outPath); } catch {}
