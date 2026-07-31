@@ -1409,7 +1409,7 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     // WebP, not GIF: GIF transparency is 1-bit, which leaves hard edges on the
     // anti-aliased borders stickers have. WebP carries the full alpha channel.
     // Costs ~40s a sticker — rlottie is ~7x faster but discards alpha entirely.
-    await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 120_000 });
+    await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 300_000 });
 
     const webp = fs.readFileSync(outPath);
     const form = new FormData();
