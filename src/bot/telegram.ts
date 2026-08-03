@@ -12,7 +12,7 @@ import crypto from "crypto";
 import fs from "fs";
 
 const execFileAsync = promisify(execFile);
-const TGS_SCRIPT = path.join(process.cwd(), "scripts", "tgs_to_webp.py");
+const TGS_SCRIPT = path.join(process.cwd(), "scripts", "tgs_to_gif.py");
 const INSTAGRAM_COOKIES = process.env.INSTAGRAM_COOKIES || path.join(process.cwd(), "config", "instagram_cookies.txt");
 const INSTAGRAM_URL_RE = /https?:\/\/(?:www\.)?instagram\.com\/[^\s]+/i;
 const TG_UPLOAD_LIMIT = 50 * 1024 * 1024;
@@ -1396,7 +1396,7 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
 
   const tmpId  = crypto.randomBytes(8).toString("hex");
   const inPath  = path.join(os.tmpdir(), `${tmpId}.tgs`);
-  const outPath = path.join(os.tmpdir(), `${tmpId}.webp`);
+  const outPath = path.join(os.tmpdir(), `${tmpId}.gif`);
 
   // Both fetches below throw an identical "TypeError: fetch failed" on transport
   // errors, so track which one we're in to keep failures diagnosable
@@ -1416,16 +1416,18 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     stage = "convert";
     await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 300_000 });
 
-    const webp = fs.readFileSync(outPath);
+    // GIF rather than WebP: Android's gallery won't save animated WebP. Costs
+    // 1-bit alpha (harder edges) and a 256-colour palette per frame.
+    const gif  = fs.readFileSync(outPath);
     const form = new FormData();
-    form.append("file", new Blob([webp], { type: "image/webp" }), "sticker.webp");
-    form.append("content", "animated sticker — sticker.webp");
+    form.append("file", new Blob([gif], { type: "image/gif" }), "sticker.gif");
+    form.append("content", "animated sticker — sticker.gif");
 
-    stage = `upload (${webp.length} bytes)`;
+    stage = `upload (${gif.length} bytes)`;
     const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
 
-    ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.webp`", { parse_mode: "Markdown" });
+    ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.gif`", { parse_mode: "Markdown" });
   } catch (err) {
     // undici buries the real transport reason (DNS, TLS, timeout) in .cause
     const cause = (err as any)?.cause;
