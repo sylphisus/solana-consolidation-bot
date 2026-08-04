@@ -60,8 +60,16 @@ def main() -> int:
         fps = lib.lottie_animation_get_framerate(anim) or 60.0
         buf = (ctypes.c_uint32 * (SIZE * SIZE))()
 
+        # GIF delays are whole centiseconds, and viewers clamp anything under
+        # 2cs up to 10cs — a 60fps sticker written at 1cs plays 6x slow. Cap at
+        # the fastest un-clamped rate and drop source frames to keep real time.
+        delay_cs = max(2, int(round(100 / fps)))
+        out_fps = 100 / delay_cs
+        count = max(1, int(round(total / fps * out_fps)))
+        indices = [min(total - 1, int(round(i * fps / out_fps))) for i in range(count)]
+
         frames = []
-        for i in range(total):
+        for i in indices:
             lib.lottie_animation_render(anim, i, buf, SIZE, SIZE, SIZE * 4)
             # rlottie writes premultiplied BGRA; undo both for Pillow
             px = np.frombuffer(buf, dtype=np.uint8).reshape(SIZE, SIZE, 4)
@@ -84,7 +92,7 @@ def main() -> int:
         sys.argv[2],
         save_all=True,
         append_images=gif_frames[1:],
-        duration=int(round(1000 / fps)),
+        duration=delay_cs * 10,
         loop=0,
         transparency=255,
         disposal=2,  # clear each frame, otherwise transparent areas smear
