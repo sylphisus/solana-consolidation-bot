@@ -98,7 +98,22 @@ export function initTelegram(cb: TelegramCallbacks): void {
   });
 
   registerHandlers(tg);
-  tg.launch().then(() => logger.info("Telegram bot connected", { chatId: authorizedChatId }));
+
+  tg.catch((err: any) => {
+    logger.error("Telegraf handler error", { error: String(err) });
+  });
+
+  tg.launch()
+    .then(() => logger.info("Telegram bot connected", { chatId: authorizedChatId }))
+    .catch((err) => {
+      logger.error("Telegraf launch failed — retrying in 5s", { error: String(err) });
+      setTimeout(() => {
+        tg?.launch()
+          .then(() => logger.info("Telegram bot connected (retry)", { chatId: authorizedChatId }))
+          .catch((err2) => logger.error("Telegraf retry also failed", { error: String(err2) }));
+      }, 5000);
+    });
+
   process.once("SIGINT",  () => tg?.stop("SIGINT"));
   process.once("SIGTERM", () => tg?.stop("SIGTERM"));
 }
