@@ -57,7 +57,52 @@ type WizardStep =
 
 type SettingsField = "levelSpacingUsd" | "touchThreshold" | "hysteresisPct" | "hysteresisUsd" | "minSecsBetweenTouches" | "invalidationPct" | "sellPct" | "minProfitPct" | "atlAlertSpacingUsd" | "upsideAlertPct" | "buyMcap" | "rangePct" | "rangeSizeUsd" | "rangeDurationSecs";
 
-const wizardState = new Map<number, WizardStep>();
+// Does this step expect a raw base58 address as its next input?
+//
+// CA auto-detection must not intercept a step that says true; every step that
+// says false MUST fall through to it, so a pasted CA always adds a token.
+// This table is exhaustive over WizardStep by construction: add a flow or a step
+// and the Record stops type-checking until you declare an answer here. That is
+// deliberate — a wizard silently widening this intercept is what previously made
+// it impossible to add a token after an abandoned Balance Monitor flow.
+type WizardKey<W> = W extends { flow: infer F extends string; step: infer S extends string }
+  ? `${F}:${S}`
+  : never;
+
+const CONSUMES_BASE58: Record<WizardKey<WizardStep>, boolean> = {
+  "remove_token:await_pick":              false,
+  "settings:await_token":                 false,
+  "settings:await_field":                 false,
+  "settings:await_value":                 false,
+  "watch_wallet:await_address":           true,
+  "balance_monitor:await_mint":           true,
+  "balance_monitor:await_wallets":        true,
+  "balance_monitor_add_wallet:await_wallet": true,
+};
+
+function consumesBase58(w: WizardStep): boolean {
+  return CONSUMES_BASE58[`${w.flow}:${w.step}` as WizardKey<WizardStep>];
+}
+
+// Wizard state expires so a flow abandoned mid-way can never trap later input
+const WIZARD_IDLE_MS = 10 * 60 * 1000;
+
+const wizardState = new Map<number, { step: WizardStep; at: number }>();
+
+function setWizard(chatId: number, step: WizardStep): void {
+  wizardState.set(chatId, { step, at: Date.now() });
+}
+
+function getWizard(chatId: number): WizardStep | undefined {
+  const entry = wizardState.get(chatId);
+  if (!entry) return undefined;
+  if (Date.now() - entry.at > WIZARD_IDLE_MS) { wizardState.delete(chatId); return undefined; }
+  return entry.step;
+}
+
+function clearWizard(chatId: number): void {
+  wizardState.delete(chatId);
+}
 
 let tg: Telegraf | null = null;
 let authorizedChatId: number | null = null;
@@ -121,10 +166,10 @@ export function initTelegram(cb: TelegramCallbacks): void {
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 function registerHandlers(bot: Telegraf): void {
-  bot.start((ctx) => { wizardState.delete(ctx.chat.id); sendHome(ctx); });
-  bot.command("help",   (ctx) => { wizardState.delete(ctx.chat.id); sendHome(ctx); });
-  bot.command("menu",   (ctx) => { wizardState.delete(ctx.chat.id); sendHome(ctx); });
-  bot.command("cancel", (ctx) => { wizardState.delete(ctx.chat.id); ctx.reply("Cancelled."); sendHome(ctx); });
+  bot.start((ctx) => { clearWizard(ctx.chat.id); sendHome(ctx); });
+  bot.command("help",   (ctx) => { clearWizard(ctx.chat.id); sendHome(ctx); });
+  bot.command("menu",   (ctx) => { clearWizard(ctx.chat.id); sendHome(ctx); });
+  bot.command("cancel", (ctx) => { clearWizard(ctx.chat.id); ctx.reply("Cancelled."); sendHome(ctx); });
 
   bot.command("status",      cmdTokens);
   bot.command("trades",      cmdTrades);
@@ -136,7 +181,7 @@ function registerHandlers(bot: Telegraf): void {
 
   // Sticker / GIF → download and send to Discord
   bot.on("sticker", async (ctx) => {
-    wizardState.delete(ctx.chat.id);
+    clearWizard(ctx.chat.id);
     const s = (ctx.message as any).sticker;
     if (s.is_animated) {
       await downloadConvertTgsAndSend(ctx, s.file_id);
@@ -148,7 +193,7 @@ function registerHandlers(bot: Telegraf): void {
   });
 
   bot.on("animation", async (ctx) => {
-    wizardState.delete(ctx.chat.id);
+    clearWizard(ctx.chat.id);
     const anim = (ctx.message as any).animation;
     const ext  = anim.mime_type === "image/gif" ? "gif" : "mp4";
     await downloadAndSendToDiscord(ctx, anim.file_id, `animation.${ext}`, "GIF");
@@ -164,19 +209,15 @@ function registerHandlers(bot: Telegraf): void {
     const text = ((ctx.message as any)?.text ?? "").trim();
 
     // Wizards that expect base58 input must intercept before CA auto-detection
-    const activeWizard = wizardState.get(ctx.chat.id);
-    if (
-      (activeWizard?.flow === "watch_wallet" && activeWizard.step === "await_address") ||
-      activeWizard?.flow === "balance_monitor" ||
-      activeWizard?.flow === "balance_monitor_add_wallet"
-    ) {
+    const activeWizard = getWizard(ctx.chat.id);
+    if (activeWizard && consumesBase58(activeWizard)) {
       await handleWizardInput(ctx, activeWizard);
       return;
     }
 
     // CA detection takes priority over any other active wizard state
     if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
-      wizardState.delete(ctx.chat.id);
+      clearWizard(ctx.chat.id);
       await handleAutoAddCA(ctx, text);
       return;
     }
@@ -185,14 +226,14 @@ function registerHandlers(bot: Telegraf): void {
     // Supports optional playlist item spec after URL: "<url> 38" or "<url> 38-40" or "<url> 1,3,38"
     const igMatch = text.match(INSTAGRAM_URL_RE);
     if (igMatch) {
-      wizardState.delete(ctx.chat.id);
+      clearWizard(ctx.chat.id);
       const afterUrl = text.slice(igMatch.index! + igMatch[0].length).trim();
       const playlistItems = /^[\d,\-]+$/.test(afterUrl) ? afterUrl : undefined;
       await downloadInstagramAndSend(ctx, igMatch[0], playlistItems);
       return;
     }
 
-    const wizard = wizardState.get(ctx.chat.id);
+    const wizard = getWizard(ctx.chat.id);
     if (wizard) { await handleWizardInput(ctx, wizard); return; }
 
     ctx.reply("Send /help to see the menu.", mainMenuKeyboard());
@@ -243,7 +284,7 @@ function backKeyboard() {
 
 async function handleCallback(ctx: Context, data: string): Promise<void> {
   const chatId = ctx.chat!.id;
-  const wizard = wizardState.get(chatId);
+  const wizard = getWizard(chatId);
 
   // Test sell — handled outside wizard state
   if (data.startsWith("wiz:testsell:")) {
@@ -335,7 +376,7 @@ This will sell your ENTIRE balance immediately.`,
       }
       case "watchwallet": return showWatchWalletMenu(ctx);
       case "watchwallet_set": {
-        wizardState.set(ctx.chat!.id, { flow: "watch_wallet", step: "await_address" });
+        setWizard(ctx.chat!.id, { flow: "watch_wallet", step: "await_address" });
         ctx.reply(
           "👁 *Watch Wallet*\n\nPaste the Solana wallet address you want to mirror.\n\nThe bot will *auto-add* any token it buys and *auto-remove* when it fully sells.\n\n/cancel to go back",
           { parse_mode: "Markdown" }
@@ -352,7 +393,7 @@ This will sell your ENTIRE balance immediately.`,
       }
       case "balancemonitors": return showBalanceMonitorsMenu(ctx);
       case "bm_add": {
-        wizardState.set(ctx.chat!.id, { flow: "balance_monitor", step: "await_mint" });
+        setWizard(ctx.chat!.id, { flow: "balance_monitor", step: "await_mint" });
         ctx.reply(
           "📊 *Balance Monitor — New*\n\nPaste the token CA you want to track.\n\n/cancel to go back",
           { parse_mode: "Markdown" }
@@ -397,7 +438,7 @@ This will sell your ENTIRE balance immediately.`,
   // Balance monitor — add wallet to existing monitor
   if (data.startsWith("wiz:bm_aw:")) {
     const monitorId = parseInt(data.split(":")[2], 10);
-    wizardState.set(ctx.chat!.id, { flow: "balance_monitor_add_wallet", step: "await_wallet", monitorId });
+    setWizard(ctx.chat!.id, { flow: "balance_monitor_add_wallet", step: "await_wallet", monitorId });
     ctx.reply(
       "📊 Paste the wallet address to add.\n\n/cancel to go back",
       { parse_mode: "Markdown" }
@@ -622,13 +663,14 @@ async function handleAutoAddCA(ctx: Context, mint: string): Promise<void> {
       result + `\n\nGrid floor set at current mcap: *${fmtMc(marketCap)}*`,
       { parse_mode: "Markdown" }
     );
-    wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+    setWizard(chatId, { flow: "settings", step: "await_field", mint, symbol });
     showSettingsForToken(ctx, mint, symbol);
-  } catch {
+  } catch (err) {
     ctx.reply(
-      `❌ Couldn't find that token on DexScreener.\n\n` +
-      `Make sure it has graduated and has an active pair, then try again.`,
-      backKeyboard()
+      `❌ Couldn't add that token.\n\n` +
+      `Reason: \`${String(err)}\`\n\n` +
+      `If it's a lookup failure, make sure it has graduated and has an active pair, then try again.`,
+      { parse_mode: "Markdown", ...backKeyboard() }
     );
   }
 }
@@ -705,7 +747,7 @@ function cmdRemoveByTicker(ctx: Context): void {
       } else {
         // Flush before showing a disambiguation picker
         flushAccumulated(false);
-        wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
+        setWizard(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
         const rows = matches.map(t => [
           Markup.button.callback(`#${t.id} ${t.symbol}  (${t.mint.slice(0, 4)}…${t.mint.slice(-4)})`, `wiz:rm:${t.idx}`),
         ]);
@@ -727,7 +769,7 @@ function startRemoveToken(ctx: Context, showAll: boolean = false): void {
   if (!callbacks) return;
   const tokens = callbacks.getTokenList();
   if (tokens.length === 0) { ctx.reply("No tokens to remove.", backKeyboard()); return; }
-  wizardState.set(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
+  setWizard(ctx.chat!.id, { flow: "remove_token", step: "await_pick" });
 
   const PAGE = 10;
   const hasMore = tokens.length > PAGE;
@@ -754,7 +796,7 @@ function startSettings(ctx: Context, showAll: boolean): void {
     ctx.reply("No tokens added yet.", backKeyboard());
     return;
   }
-  wizardState.set(ctx.chat!.id, { flow: "settings", step: "await_token" });
+  setWizard(ctx.chat!.id, { flow: "settings", step: "await_token" });
 
   // Sort by m5 volume descending so highest-activity tokens appear first
   const stateMap = callbacks.getState().tokens;
@@ -884,7 +926,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
       const { mint, symbol } = wizard as any;
       const result = callbacks!.resetAtl(mint);
       ctx.reply(result, { parse_mode: "Markdown" });
-      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      setWizard(chatId, { flow: "settings", step: "await_field", mint, symbol });
       showSettingsForToken(ctx, mint, symbol, 1);
     }
     return;
@@ -893,7 +935,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
   if (payload === "settings_p2" || payload === "settings_p1") {
     if (wizard?.flow === "settings" && (wizard.step === "await_field" || wizard.step === "await_value")) {
       const { mint, symbol } = wizard as any;
-      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      setWizard(chatId, { flow: "settings", step: "await_field", mint, symbol });
       showSettingsForToken(ctx, mint, symbol, payload === "settings_p2" ? 2 : 1);
     }
     return;
@@ -903,7 +945,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
   if (payload.startsWith("cfg_token:") && wizard.flow === "settings") {
     const idx = parseInt(payload.split(":")[1], 10);
     const { mint, symbol } = callbacks!.getTokenList()[idx];
-    wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+    setWizard(chatId, { flow: "settings", step: "await_field", mint, symbol });
     showSettingsForToken(ctx, mint, symbol);
     return;
   }
@@ -919,7 +961,7 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
       const newVal = !tc.priceTracking;
       callbacks!.updateSettings(mint, { priceTracking: newVal });
       ctx.reply(`📡 Price tracking *${newVal ? "enabled" : "disabled"}* for *${symbol}*.`, { parse_mode: "Markdown" });
-      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      setWizard(chatId, { flow: "settings", step: "await_field", mint, symbol });
       showSettingsForToken(ctx, mint, symbol);
       return;
     }
@@ -943,13 +985,13 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
       } else {
         ctx.reply(`🎯 Range mode *disabled* for *${symbol}* — back to consolidation detection.`, { parse_mode: "Markdown" });
       }
-      wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+      setWizard(chatId, { flow: "settings", step: "await_field", mint, symbol });
       showSettingsForToken(ctx, mint, symbol, 2);
       return;
     }
 
     const field = rawField as SettingsField;
-    wizardState.set(chatId, { flow: "settings", step: "await_value", mint: wizard.mint, symbol: wizard.symbol, field });
+    setWizard(chatId, { flow: "settings", step: "await_value", mint: wizard.mint, symbol: wizard.symbol, field });
 
     const prompts: Record<SettingsField, string> = {
       levelSpacingUsd:
@@ -1018,7 +1060,19 @@ async function handleWizardButton(ctx: Context, wizard: WizardStep, payload: str
 
 // ─── Wizard Free-text Handler ─────────────────────────────────────────────────
 
+// Any throw inside a wizard clears its state — a half-finished flow must never
+// survive to swallow the next thing the user types
 async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void> {
+  try {
+    await runWizardInput(ctx, wizard);
+  } catch (err) {
+    clearWizard(ctx.chat!.id);
+    logger.warn("Wizard input failed — state cleared", { flow: wizard.flow, error: String(err) });
+    ctx.reply(`❌ That step failed: \`${String(err)}\`\n\nWizard cancelled.`, { parse_mode: "Markdown" });
+  }
+}
+
+async function runWizardInput(ctx: Context, wizard: WizardStep): Promise<void> {
   const chatId = ctx.chat!.id;
   const text = ((ctx.message as any)?.text ?? "").trim();
 
@@ -1029,7 +1083,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       ctx.reply("❌ That doesn't look like a valid Solana address. Paste the full base58 address.\n\n/cancel to go back");
       return;
     }
-    wizardState.delete(chatId);
+    clearWizard(chatId);
     ctx.reply("⏳ Setting up wallet watcher...");
     try {
       await callbacks!.setWatchedWallet(text);
@@ -1053,13 +1107,15 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       ctx.reply("⏳ Fetching token info...");
       try {
         const { symbol } = await fetchTokenInfo(text);
-        wizardState.set(chatId, { flow: "balance_monitor", step: "await_wallets", mint: text, symbol });
+        setWizard(chatId, { flow: "balance_monitor", step: "await_wallets", mint: text, symbol });
         ctx.reply(
           `📊 *${symbol}*\n\nPaste the wallet addresses to watch (one per line or comma-separated).\n\n/cancel to go back`,
           { parse_mode: "Markdown" }
         );
       } catch {
-        ctx.reply("❌ Couldn't fetch token info. Check the CA and try again.\n\n/cancel to go back");
+        // Clear the wizard so a failed lookup doesn't trap every later CA paste
+        clearWizard(chatId);
+        ctx.reply("❌ Couldn't fetch token info. Balance monitor cancelled — paste a CA to add a token, or reopen Balance Monitor to retry.");
       }
       return;
     }
@@ -1075,7 +1131,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
         return;
       }
 
-      wizardState.delete(chatId);
+      clearWizard(chatId);
       const result = await callbacks!.addBalanceMonitor(mint, symbol, valid);
       let reply = result;
       if (invalid.length > 0) reply += `\n\n⚠️ ${invalid.length} invalid address(es) skipped.`;
@@ -1090,7 +1146,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       ctx.reply("❌ Invalid Solana address.\n\n/cancel to go back");
       return;
     }
-    wizardState.delete(chatId);
+    clearWizard(chatId);
     const result = await callbacks!.addWalletToMonitor(monitorId, text);
     ctx.reply(result, { parse_mode: "Markdown" });
     return showMonitorDetail(ctx, monitorId);
@@ -1159,7 +1215,7 @@ async function handleWizardInput(ctx: Context, wizard: WizardStep): Promise<void
       `${result}\n\n*${fieldNames[field]}* set to \`${usdField ? fmtMc(value!) : value ?? "cleared"}\``,
       { parse_mode: "Markdown" }
     );
-    wizardState.set(chatId, { flow: "settings", step: "await_field", mint, symbol });
+    setWizard(chatId, { flow: "settings", step: "await_field", mint, symbol });
     showSettingsForToken(ctx, mint, symbol);
     return;
   }

@@ -45,6 +45,8 @@ function loadConfig(): BotConfig {
     t.priceTracking       ??= true;
     t.atlAlertSpacingUsd  ??= 10_000;
     t.upsideAlertPct      ??= 30;
+    t.allTimeLow          ??= null;
+    t.lastAtlAlertMcap    ??= null;
     t.rangeMode           ??= false;
     t.rangePct            ??= 20;
     t.rangeSizeUsd        ??= 10_000;
@@ -93,7 +95,11 @@ function makeTokenState(mint: string, symbol: string): TokenState {
 function initState(config: BotConfig): BotState {
   const tokens = new Map<string, TokenState>();
   for (const tc of config.tokens) {
-    tokens.set(tc.mint, makeTokenState(tc.mint, tc.symbol));
+    const ts = makeTokenState(tc.mint, tc.symbol);
+    // Restore the persisted ATL so a restart doesn't re-seed it at the current mcap
+    ts.allTimeLow       = tc.allTimeLow;
+    ts.lastAtlAlertMcap = tc.lastAtlAlertMcap;
+    tokens.set(tc.mint, ts);
   }
   return { tokens, solBalance: 0, startTime: Date.now(), totalTradesExecuted: 0 };
 }
@@ -165,35 +171,44 @@ async function watchToken(
     const prevCounts = new Map(ts2.yLevels.map((l) => [l.value, l.touchCount]));
     const event = processMarketCap(ts2, tc2, update.marketCap);
 
-    let invalidationFired = false;
     for (const level of ts2.yLevels) {
       const prev = prevCounts.get(level.value) ?? 0;
       if (level.touchCount > prev) {
         await notifyTouchDetected(update.mint, ts2.symbol, level.touchCount, tc2.touchThreshold,
           update.marketCap, level.value);
       } else if (prev > 0 && level.touchCount === 0) {
-        invalidationFired = true;
         await notifyInvalidation(update.mint, ts2.symbol, level.value, update.marketCap, tc2.invalidationPct);
       }
     }
 
     // ── Price tracking: ATL and upside alerts ─────────────────────────────────
-    if (tc2.priceTracking && !invalidationFired) {
+    if (tc2.priceTracking) {
       const mcap = update.marketCap;
+
+      // The upside baseline is per-run, so it initialises on its own — allTimeLow
+      // may already be restored from config and would otherwise skip this
+      if (ts2.lastUpsideAlertMcap === null) ts2.lastUpsideAlertMcap = mcap;
 
       // Initialise on first reading
       if (ts2.allTimeLow === null) {
         ts2.allTimeLow = mcap;
         ts2.lastAtlAlertMcap = mcap;
-        ts2.lastUpsideAlertMcap = mcap;
+        tc2.allTimeLow = mcap;
+        tc2.lastAtlAlertMcap = mcap;
+        saveConfig(config);
       } else {
         // ATL alert — fires every time ATL drops another atlAlertSpacingUsd
         if (mcap < ts2.allTimeLow) {
           ts2.allTimeLow = mcap;
-          if (ts2.lastAtlAlertMcap !== null && mcap <= ts2.lastAtlAlertMcap - tc2.atlAlertSpacingUsd) {
-            ts2.lastAtlAlertMcap = mcap;
-            await notifyAtlAlert(update.mint, ts2.symbol, mcap, tc2.atlAlertSpacingUsd);
-          }
+          const alertDue = ts2.lastAtlAlertMcap !== null
+            && mcap <= ts2.lastAtlAlertMcap - tc2.atlAlertSpacingUsd;
+          if (alertDue) ts2.lastAtlAlertMcap = mcap;
+          // Persist so the ATL baseline survives a restart instead of re-seeding
+          // at whatever the mcap happens to be when the process comes back up
+          tc2.allTimeLow = ts2.allTimeLow;
+          tc2.lastAtlAlertMcap = ts2.lastAtlAlertMcap;
+          saveConfig(config);
+          if (alertDue) await notifyAtlAlert(update.mint, ts2.symbol, mcap, tc2.atlAlertSpacingUsd);
         }
 
         // Upside alert — fires every time mcap rises upsideAlertPct% from last baseline
@@ -303,6 +318,8 @@ async function main(): Promise<void> {
           priceTracking: true,
           atlAlertSpacingUsd: 10_000,
           upsideAlertPct: 30,
+          allTimeLow: null,
+          lastAtlAlertMcap: null,
           rangeMode: false,
           rangePct: 20,
           rangeSizeUsd: 10_000,
@@ -407,6 +424,8 @@ async function main(): Promise<void> {
         priceTracking: true,
         atlAlertSpacingUsd: 10_000,
         upsideAlertPct: 30,
+        allTimeLow: null,
+        lastAtlAlertMcap: null,
         rangeMode: false,
         rangePct: 20,
         rangeSizeUsd: 10_000,
@@ -470,6 +489,9 @@ async function main(): Promise<void> {
       if (!ts || !tc) return `Token not found.`;
       ts.allTimeLow = ts.currentMarketCap;
       ts.lastAtlAlertMcap = ts.currentMarketCap;
+      tc.allTimeLow = ts.currentMarketCap;
+      tc.lastAtlAlertMcap = ts.currentMarketCap;
+      saveConfig(config);
       return `✅ ATL reset for *${tc.symbol}*. New baseline: \`${fmtMc(ts.currentMarketCap ?? 0)}\``;
     },
 

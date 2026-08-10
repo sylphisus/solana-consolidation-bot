@@ -17,6 +17,8 @@ export interface TokenConfig {
   priceTracking: boolean;        // if true, sends ATL and upside alerts via Telegram
   atlAlertSpacingUsd: number;    // fire an ATL alert each time ATL drops by this much (default $10k)
   upsideAlertPct: number;        // fire an upside alert each time mcap rises this % from last alert (default 30)
+  allTimeLow: number | null;       // persisted true ATL — survives restarts (null = not yet seen)
+  lastAtlAlertMcap: number | null; // persisted mcap at the last ATL alert
   // Range mode — alternative to consolidation detection (mutually exclusive)
   rangeMode: boolean;            // if true, range-dwell detection replaces the touch grid
   rangePct: number;              // % above the anchor mcap where the band CENTER sits
