@@ -7,6 +7,7 @@ import { processMarketCap, fmtMc } from "./consolidation";
 import { executeSell } from "./executor";
 import { logger } from "./logger";
 import {
+  TelegramCallbacks,
   initTelegram,
   notifyStartup,
   notifyTouchDetected,
@@ -28,6 +29,7 @@ import {
 import { startBondMonitor, stopBondMonitor, getPendingBonds } from "./pumpfun";
 import { createWalletWatcher } from "./wallet-watcher";
 import { createBalanceMonitor } from "./balance-monitor";
+import { initControl } from "./control";
 import fs from "fs";
 import path from "path";
 
@@ -400,8 +402,8 @@ async function main(): Promise<void> {
 
   await syncBalanceAddresses();
 
-  // ── Telegram ────────────────────────────────────────────────────────────────
-  initTelegram({
+  // ── Telegram + local control API (Hermes) ───────────────────────────────────
+  const callbacks: TelegramCallbacks = {
     getState:      () => state,
     getTradeHistory: () => tradeHistory,
     getTokenList:  () => config.tokens.map((t) => ({ id: t.id, mint: t.mint, symbol: t.symbol })),
@@ -594,7 +596,9 @@ async function main(): Promise<void> {
             ((config.balanceMonitors ?? []).some((m) => m.wallets.length > 0) ? 1 : 0),
       total: 10,
     }),
-  });
+  };
+  initTelegram(callbacks);
+  initControl(callbacks);
 
   await notifyStartup(
     keypair.publicKey.toBase58(),
