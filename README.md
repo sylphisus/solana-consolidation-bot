@@ -23,6 +23,7 @@ Paste any Solana contract address directly in chat to add a token. All controls 
 | `/remove` or `/r` | Remove a token by ticker |
 | `/settings` | Per-token settings wizard |
 | `/fetch` | Fetch token info from DexScreener |
+| `/laggy` | Next animated sticker goes to Discord in slow-mo, one time (`/laggy off` cancels) |
 
 Main menu buttons: Tokens, Trade History, Remove Token, Token Settings, Test Sell, PumpFun Bond Monitor, Watch Wallet, Balance Monitor, Reset Token Numbers.
 

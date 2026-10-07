@@ -42,11 +42,15 @@ def to_gif_frame(im: "Image.Image") -> "Image.Image":
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("Usage: tgs_to_gif.py <input.tgs> <output.gif>", file=sys.stderr)
+    args = sys.argv[1:]
+    laggy = "--laggy" in args
+    args = [a for a in args if a != "--laggy"]
+    if len(args) != 2:
+        print("Usage: tgs_to_gif.py [--laggy] <input.tgs> <output.gif>", file=sys.stderr)
         return 1
+    src, dst = args
 
-    with gzip.open(sys.argv[1], "rb") as f:
+    with gzip.open(src, "rb") as f:
         data = f.read()
 
     # rlottie caches by key; the resource path is unused for self-contained stickers
@@ -67,6 +71,10 @@ def main() -> int:
         out_fps = 100 / delay_cs
         count = max(1, int(round(total / fps * out_fps)))
         indices = [min(total - 1, int(round(i * fps / out_fps))) for i in range(count)]
+        if laggy:
+            # On purpose (/laggy): the slow-mo look from before ee12271. Every source frame
+            # at 10cs, which is what viewers did to the 1cs delays: 10fps, 6x slow at 60fps.
+            delay_cs, indices = 10, list(range(total))
 
         frames = []
         for i in indices:
@@ -89,7 +97,7 @@ def main() -> int:
 
     gif_frames = [to_gif_frame(f) for f in frames]
     gif_frames[0].save(
-        sys.argv[2],
+        dst,
         save_all=True,
         append_images=gif_frames[1:],
         duration=delay_cs * 10,

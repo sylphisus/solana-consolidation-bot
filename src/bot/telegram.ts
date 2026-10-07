@@ -133,10 +133,11 @@ export function initTelegram(cb: TelegramCallbacks): void {
     const chatId = ctx.chat?.id;
     if (chatId === authorizedChatId) return next();
 
-    // Guest gets sticker/animation access only
+    // Guest gets sticker/animation access only (plus /laggy, which only affects stickers)
     if (guestChatId && chatId === guestChatId) {
       const msg = ctx.message as any;
       if (msg?.sticker || msg?.animation) return next();
+      if (/^\/laggy(@\w+)?(\s|$)/i.test(msg?.text ?? "")) return next();
     }
 
     logger.warn("Unauthorized Telegram access", { chatId });
@@ -178,15 +179,16 @@ function registerHandlers(bot: Telegraf): void {
   bot.command("r",           (ctx) => cmdRemoveByTicker(ctx));
   bot.command("settings",    (ctx) => startSettings(ctx, false));
   bot.command("fetch",       cmdFetch);
+  bot.command("laggy",       cmdLaggy);
 
   // Sticker / GIF → download and send to Discord
   bot.on("sticker", async (ctx) => {
     clearWizard(ctx.chat.id);
     const s = (ctx.message as any).sticker;
     if (s.is_animated) {
-      await downloadConvertTgsAndSend(ctx, s.file_id);
+      await downloadConvertTgsAndSend(ctx, s.file_id, takeLaggy(ctx.chat.id));
     } else if (s.is_video) {
-      await downloadConvertWebmAndSend(ctx, s.file_id);
+      await downloadConvertWebmAndSend(ctx, s.file_id, takeLaggy(ctx.chat.id));
     } else {
       await downloadAndSendToDiscord(ctx, s.file_id, "sticker.webp", "sticker");
     }
@@ -1461,7 +1463,29 @@ async function safeSend(message: string): Promise<void> {
   }
 }
 
-async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<void> {
+// /laggy arms the chat's next animated or video sticker for a one-time slow-mo export: every
+// frame kept and held 100ms, the look the exporter had by accident before ee12271. A static
+// sticker or GIF leaves it armed; a failed send re-arms it so the retry is still laggy.
+// In memory only, so a restart clears it.
+const laggyChats = new Set<number>();
+
+function takeLaggy(chatId: number): boolean {
+  return laggyChats.delete(chatId);
+}
+
+function cmdLaggy(ctx: Context): void {
+  const chatId = ctx.chat!.id;
+  const arg = ((ctx.message as any)?.text ?? "").split(/\s+/)[1]?.toLowerCase();
+  if (arg === "off") {
+    laggyChats.delete(chatId);
+    ctx.reply("Laggy cancelled: the next sticker goes at normal speed.");
+  } else {
+    laggyChats.add(chatId);
+    ctx.reply("🐢 Your next animated sticker goes to Discord laggy. (/laggy off cancels.)");
+  }
+}
+
+async function downloadConvertTgsAndSend(ctx: Context, fileId: string, laggy = false): Promise<void> {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) { ctx.reply("❌ `DISCORD_WEBHOOK_URL` is not set in .env.", { parse_mode: "Markdown" }); return; }
 
@@ -1485,7 +1509,7 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     // anti-aliased borders stickers have. WebP carries the full alpha channel.
     // Costs ~40s a sticker — rlottie is ~7x faster but discards alpha entirely.
     stage = "convert";
-    await execFileAsync("python3", [TGS_SCRIPT, inPath, outPath], { timeout: 300_000 });
+    await execFileAsync("python3", [TGS_SCRIPT, ...(laggy ? ["--laggy"] : []), inPath, outPath], { timeout: 300_000 });
 
     // GIF rather than WebP: Android's gallery won't save animated WebP. Costs
     // 1-bit alpha (harder edges) and a 256-colour palette per frame.
@@ -1498,8 +1522,9 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
     const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
 
-    ctx.reply("✅ *Animated sticker* sent to Discord as `sticker.gif`", { parse_mode: "Markdown" });
+    ctx.reply(`✅ *Animated sticker* sent to Discord as \`sticker.gif\`${laggy ? " (laggy)" : ""}`, { parse_mode: "Markdown" });
   } catch (err) {
+    if (laggy) laggyChats.add(ctx.chat!.id);
     // undici buries the real transport reason (DNS, TLS, timeout) in .cause
     const cause = (err as any)?.cause;
     logger.error("TGS conversion/send failed", {
@@ -1514,7 +1539,7 @@ async function downloadConvertTgsAndSend(ctx: Context, fileId: string): Promise<
   }
 }
 
-async function downloadConvertWebmAndSend(ctx: Context, fileId: string): Promise<void> {
+async function downloadConvertWebmAndSend(ctx: Context, fileId: string, laggy = false): Promise<void> {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) { ctx.reply("❌ `DISCORD_WEBHOOK_URL` is not set in .env.", { parse_mode: "Markdown" }); return; }
 
@@ -1532,7 +1557,8 @@ async function downloadConvertWebmAndSend(ctx: Context, fileId: string): Promise
 
     await execFileAsync("ffmpeg", [
       "-i", inPath,
-      "-vf", "fps=15,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+      // laggy: restamp every frame 0.1s apart (all frames kept) instead of resampling to 15fps
+      "-vf", `${laggy ? "setpts=N/10/TB,fps=10" : "fps=15"},scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
       "-loop", "0",
       outPath,
     ], { timeout: 30_000 });
@@ -1545,8 +1571,9 @@ async function downloadConvertWebmAndSend(ctx: Context, fileId: string): Promise
     const discordRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!discordRes.ok) throw new Error(`Discord HTTP ${discordRes.status}`);
 
-    ctx.reply("✅ *Video sticker* sent to Discord as `sticker.gif`", { parse_mode: "Markdown" });
+    ctx.reply(`✅ *Video sticker* sent to Discord as \`sticker.gif\`${laggy ? " (laggy)" : ""}`, { parse_mode: "Markdown" });
   } catch (err) {
+    if (laggy) laggyChats.add(ctx.chat!.id);
     logger.error("WebM conversion/send failed", { error: String(err) });
     ctx.reply("❌ Failed to convert sticker. Try again.");
   } finally {
